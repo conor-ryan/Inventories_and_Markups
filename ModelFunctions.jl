@@ -245,7 +245,7 @@ end
 Solve the value function using value function iteration.
 Returns the value function and optimal order policy.
 """
-function solve_value_function(params; tol=1e-4, maxiter=1000, full=false)
+function solve_value_function(params; tol=1e-4, maxiter=1000, full=false, fast_interp=true)
     Sgrid = params.Sgrid
     Ns = params.Ns
     ω_grid = params.ω_grid
@@ -272,16 +272,20 @@ function solve_value_function(params; tol=1e-4, maxiter=1000, full=false)
     # Precompute demand and operating-cost tables to avoid pow_body in the quadrature loop
     D_table, C_table = precompute_demand(p_policy_current, params)
 
-    # Precompute uniform-grid constants for fast interpolation (computed once, reused every iteration)
-    inv_h = (Ns - 1) / (Sgrid[end] - Sgrid[1])
+    # Precompute uniform-grid constants (only used when fast_interp=true)
+    inv_h     = (Ns - 1) / (Sgrid[end] - Sgrid[1])
     EV_cont_j = Vector{Float64}(undef, Ns)   # preallocate; reused every (iter, j)
 
     while diff > tol && iter < maxiter
 
         for j in 1:Nω
             # State-conditional continuation: E[V(s', ω') | ω_j] for each next-period s'
-            mul!(EV_cont_j, V_by_omega, P_ω[j, :])
-            Vinterp_j = UniformInterp(copy(EV_cont_j), Sgrid[1], inv_h)
+            if fast_interp
+                mul!(EV_cont_j, V_by_omega, P_ω[j, :])
+                Vinterp_j = UniformInterp(copy(EV_cont_j), Sgrid[1], inv_h)
+            else
+                Vinterp_j = LinearInterpolation(Sgrid, V_by_omega * P_ω[j, :], extrapolation_bc=Line())
+            end
 
             n_upper = maximum(Sgrid)
             for i in 1:Ns
