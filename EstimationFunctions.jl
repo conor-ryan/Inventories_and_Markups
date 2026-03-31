@@ -360,7 +360,8 @@ function estimate_params_ii_annual(params_base::Parameters, df_annual::DataFrame
           atanh(clamp(ρω_init, ρ_lb, ρ_ub))]
 
     result = Optim.optimize(obj, x0, Optim.NelderMead(),
-                             Optim.Options(iterations=max_iter, show_trace=false))
+                             Optim.Options(iterations=max_iter, show_trace=false,
+                                           x_tol=1e-4, f_tol=1e-4))
 
     γ̂, μω_est, σω2_est, ρω_est = unpack(Optim.minimizer(result))
 
