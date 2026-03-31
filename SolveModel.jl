@@ -1,8 +1,15 @@
-using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Plots, Interpolations, LineSearch, Random, Statistics, DataFrames, GLM, FixedEffectModels, Printf
+using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Plots, Interpolations, LineSearch, Random, Statistics, DataFrames, GLM, FixedEffectModels, Printf, BenchmarkTools
 include("ModelFunctions.jl")
 include("EstimationFunctions.jl")
 
 params = Parameters(c=1.0, fc=0.0, μω=0.2,σω2=0.05,ρ_ω=0.1, γ=0.9,δ=0.01, β=0.95, ϵ=8.0, μν=100, σν2=exp(7), Smax=100, Ns=200,scale=1.0,size=3.0)
+
+# ---------------------------------------------------
+# Single-iteration benchmark (run interactively before the full solve)
+# ---------------------------------------------------
+println("Benchmarking one value-function iteration...")
+display(@benchmark solve_value_function($params, maxiter=1) samples=10 evals=1)
+# ---------------------------------------------------
 
 Sgrid = params.Sgrid
 Smax = params.Smax
@@ -144,123 +151,123 @@ display(combined_plot)
 # histogram(inv_eop_sim[ind])
 
 
-# ---------------------------------------------------
-# OLS estimation of γ: log(expenses) = α + γ·log(demand) + ε
-# Theoretical relationship: expense = ω·D^γ  →  log(expense) = log(ω) + γ·log(D)
-# ---------------------------------------------------
-mask = (expense_sim .> 0) .& (demand_levels_sim .> 0) .& (demand_shocks_sim .> 0) .& (ω_sim .> 0)
+# # ---------------------------------------------------
+# # OLS estimation of γ: log(expenses) = α + γ·log(demand) + ε
+# # Theoretical relationship: expense = ω·D^γ  →  log(expense) = log(ω) + γ·log(D)
+# # ---------------------------------------------------
+# mask = (expense_sim .> 0) .& (demand_levels_sim .> 0) .& (demand_shocks_sim .> 0) .& (ω_sim .> 0)
 
-# Pre-compute Δ(inv/sales ratio), Δlog(ω), previous-period log(ω), and forward Δ(inv/sales)
-_n_periods = 25000   # must match the simulate_firm call above
-Δinv_sales_full      = similar(inv_sales_ratio_sim)
-Δinv_sales_fwd_full  = similar(inv_sales_ratio_sim)
-Δlog_omega_full      = similar(ω_sim)
-log_omega_prev_full  = similar(ω_sim)
-log_expense_prev_full = similar(expense_sim)
-Δinv_sales_full[1]        = NaN
-Δinv_sales_fwd_full[end]  = NaN
-Δlog_omega_full[1]        = NaN
-log_omega_prev_full[1]    = NaN
-log_expense_prev_full[1]  = NaN
-for t in 2:length(inv_sales_ratio_sim)
-    is_boundary = (t - 1) % _n_periods == 0
-    Δinv_sales_full[t]         = is_boundary ? NaN : inv_sales_ratio_sim[t] - inv_sales_ratio_sim[t - 1]
-    Δinv_sales_fwd_full[t - 1] = is_boundary ? NaN : inv_sales_ratio_sim[t] - inv_sales_ratio_sim[t - 1]
-    Δlog_omega_full[t]          = is_boundary ? NaN : log(ω_sim[t]) - log(ω_sim[t - 1])
-    log_omega_prev_full[t]      = is_boundary ? NaN : log(ω_sim[t - 1])
-    log_expense_prev_full[t]    = (is_boundary || expense_sim[t - 1] <= 0) ? NaN : log(expense_sim[t - 1])
-end
+# # Pre-compute Δ(inv/sales ratio), Δlog(ω), previous-period log(ω), and forward Δ(inv/sales)
+# _n_periods = 25000   # must match the simulate_firm call above
+# Δinv_sales_full      = similar(inv_sales_ratio_sim)
+# Δinv_sales_fwd_full  = similar(inv_sales_ratio_sim)
+# Δlog_omega_full      = similar(ω_sim)
+# log_omega_prev_full  = similar(ω_sim)
+# log_expense_prev_full = similar(expense_sim)
+# Δinv_sales_full[1]        = NaN
+# Δinv_sales_fwd_full[end]  = NaN
+# Δlog_omega_full[1]        = NaN
+# log_omega_prev_full[1]    = NaN
+# log_expense_prev_full[1]  = NaN
+# for t in 2:length(inv_sales_ratio_sim)
+#     is_boundary = (t - 1) % _n_periods == 0
+#     Δinv_sales_full[t]         = is_boundary ? NaN : inv_sales_ratio_sim[t] - inv_sales_ratio_sim[t - 1]
+#     Δinv_sales_fwd_full[t - 1] = is_boundary ? NaN : inv_sales_ratio_sim[t] - inv_sales_ratio_sim[t - 1]
+#     Δlog_omega_full[t]          = is_boundary ? NaN : log(ω_sim[t]) - log(ω_sim[t - 1])
+#     log_omega_prev_full[t]      = is_boundary ? NaN : log(ω_sim[t - 1])
+#     log_expense_prev_full[t]    = (is_boundary || expense_sim[t - 1] <= 0) ? NaN : log(expense_sim[t - 1])
+# end
 
-mask_prev = mask .& .!isnan.(log_omega_prev_full) .& .!isnan.(log_expense_prev_full)
-df_reg = DataFrame(log_expense      = log.(expense_sim[mask_prev]),
-                   log_demand       = log.(demand_levels_sim[mask_prev]),
-                   log_shock        = log.(demand_shocks_sim[mask_prev]),
-                   log_omega        = log.(ω_sim[mask_prev]),
-                   log_omega_prev   = log_omega_prev_full[mask_prev],
-                   log_expense_prev = log_expense_prev_full[mask_prev])
+# mask_prev = mask .& .!isnan.(log_omega_prev_full) .& .!isnan.(log_expense_prev_full)
+# df_reg = DataFrame(log_expense      = log.(expense_sim[mask_prev]),
+#                    log_demand       = log.(demand_levels_sim[mask_prev]),
+#                    log_shock        = log.(demand_shocks_sim[mask_prev]),
+#                    log_omega        = log.(ω_sim[mask_prev]),
+#                    log_omega_prev   = log_omega_prev_full[mask_prev],
+#                    log_expense_prev = log_expense_prev_full[mask_prev])
 
-# firm_boundary_full[t] = true for the first valid row of each firm in df_reg_Δ.
-# Each firm's valid rows start at period 2 of that firm's block: t = (k-1)*_n_periods + 2.
-firm_boundary_full = [(t >= 2) && ((t - 2) % _n_periods == 0) for t in eachindex(inv_sales_ratio_sim)]
+# # firm_boundary_full[t] = true for the first valid row of each firm in df_reg_Δ.
+# # Each firm's valid rows start at period 2 of that firm's block: t = (k-1)*_n_periods + 2.
+# firm_boundary_full = [(t >= 2) && ((t - 2) % _n_periods == 0) for t in eachindex(inv_sales_ratio_sim)]
 
-valid_Δ = mask_prev .& .!isnan.(Δinv_sales_full) .& .!isnan.(Δinv_sales_fwd_full)
-df_reg_Δ = DataFrame(log_expense       = log.(expense_sim[valid_Δ]),
-                      log_demand        = log.(demand_levels_sim[valid_Δ]),
-                      log_shock         = log.(demand_shocks_sim[valid_Δ]),
-                      log_omega         = log.(ω_sim[valid_Δ]),
-                      log_omega_prev    = log_omega_prev_full[valid_Δ],
-                      log_expense_prev  = log_expense_prev_full[valid_Δ],
-                      Δinv_sales        = Δinv_sales_full[valid_Δ],
-                      Δinv_sales_fwd    = Δinv_sales_fwd_full[valid_Δ],
-                      Δlog_omega        = Δlog_omega_full[valid_Δ],
-                      firm_boundary     = firm_boundary_full[valid_Δ])
+# valid_Δ = mask_prev .& .!isnan.(Δinv_sales_full) .& .!isnan.(Δinv_sales_fwd_full)
+# df_reg_Δ = DataFrame(log_expense       = log.(expense_sim[valid_Δ]),
+#                       log_demand        = log.(demand_levels_sim[valid_Δ]),
+#                       log_shock         = log.(demand_shocks_sim[valid_Δ]),
+#                       log_omega         = log.(ω_sim[valid_Δ]),
+#                       log_omega_prev    = log_omega_prev_full[valid_Δ],
+#                       log_expense_prev  = log_expense_prev_full[valid_Δ],
+#                       Δinv_sales        = Δinv_sales_full[valid_Δ],
+#                       Δinv_sales_fwd    = Δinv_sales_fwd_full[valid_Δ],
+#                       Δlog_omega        = Δlog_omega_full[valid_Δ],
+#                       firm_boundary     = firm_boundary_full[valid_Δ])
 
-# 4. OLS: Δ(inv/sales ratio) ~ log(demand shock ν)
-ols_Δ_shock = lm(@formula(log_expense ~ log_demand), df_reg_Δ)
-println("\n=== OLS: Δ(inv/sales) ~ log(demand shock ν) ===")
-display(coeftable(ols_Δ_shock))
+# # 4. OLS: Δ(inv/sales ratio) ~ log(demand shock ν)
+# ols_Δ_shock = lm(@formula(log_expense ~ log_demand), df_reg_Δ)
+# println("\n=== OLS: Δ(inv/sales) ~ log(demand shock ν) ===")
+# display(coeftable(ols_Δ_shock))
 
-# 5. OLS: Δ(inv/sales ratio) ~ Δlog(cost shock ω)
-ols_Δ_omega = lm(@formula(Δinv_sales ~ log_omega_prev), df_reg_Δ)
-println("\n=== OLS: Δ(inv/sales) ~ Δlog(cost shock ω) ===")
-display(coeftable(ols_Δ_omega))
+# # 5. OLS: Δ(inv/sales ratio) ~ Δlog(cost shock ω)
+# ols_Δ_omega = lm(@formula(Δinv_sales ~ log_omega_prev), df_reg_Δ)
+# println("\n=== OLS: Δ(inv/sales) ~ Δlog(cost shock ω) ===")
+# display(coeftable(ols_Δ_omega))
 
-# 6. IV: log(expense) ~ log(demand), instrument = log(ν)
-#    First stage: log(D) ~ log(ν); Second stage: log(expense) ~ log(D)̂
-iv = reg(df_reg, @formula(log_expense ~ (log_demand ~ log_shock)))
-println("\n=== IV: log(expense) ~ log(demand), instrument = log(ν) ===")
-display(coeftable(iv))
-resid_iv = FixedEffectModels.residuals(iv,df_reg)
-cov_resid_shock  = cov(resid_iv, df_reg.log_shock)
-println("Cov(residual, log(ν)): $(round(cov_resid_shock, digits=6))")
+# # 6. IV: log(expense) ~ log(demand), instrument = log(ν)
+# #    First stage: log(D) ~ log(ν); Second stage: log(expense) ~ log(D)̂
+# iv = reg(df_reg, @formula(log_expense ~ (log_demand ~ log_shock)))
+# println("\n=== IV: log(expense) ~ log(demand), instrument = log(ν) ===")
+# display(coeftable(iv))
+# resid_iv = FixedEffectModels.residuals(iv,df_reg)
+# cov_resid_shock  = cov(resid_iv, df_reg.log_shock)
+# println("Cov(residual, log(ν)): $(round(cov_resid_shock, digits=6))")
 
-# 7. IV: log(expense) ~ log(demand) + log(expense_prev), instrument = Δ(inventory/sales ratio)
-iv2 = reg(df_reg_Δ, @formula(log_expense ~ (log_demand ~ Δinv_sales)))
-println("\n=== IV: log(expense) ~ log(demand), instrument = Δ(inv/sales ratio) ===")
-display(coeftable(iv2))
-resid_iv2 = FixedEffectModels.residuals(iv2,df_reg)
-cov_resid_shock  = cov(resid_iv2, df_reg.log_shock)
-println("Cov(residual, log(ν)): $(round(cov_resid_shock, digits=6))")
+# # 7. IV: log(expense) ~ log(demand) + log(expense_prev), instrument = Δ(inventory/sales ratio)
+# iv2 = reg(df_reg_Δ, @formula(log_expense ~ (log_demand ~ Δinv_sales)))
+# println("\n=== IV: log(expense) ~ log(demand), instrument = Δ(inv/sales ratio) ===")
+# display(coeftable(iv2))
+# resid_iv2 = FixedEffectModels.residuals(iv2,df_reg)
+# cov_resid_shock  = cov(resid_iv2, df_reg.log_shock)
+# println("Cov(residual, log(ν)): $(round(cov_resid_shock, digits=6))")
 
-println("\nTrue γ: $(params.γ)")
-
-# ---------------------------------------------------
-# Bias decomposition for regression 7
-#
-# True model:  log(expense_t) = α + γ·log(D_t) + log(ω_t)
-# Instrument:  z_t = Δ(inv/sales)_t
-#
-# IV plim:  γ̂_IV → γ  +  Cov(z, log ω) / Cov(z, log D)
-#                         ─────────────────────────────
-#                           bias from ω contaminating z
-# ---------------------------------------------------
-z       = df_reg_Δ.Δinv_sales
-log_D   = df_reg_Δ.log_demand
-log_ω   = df_reg_Δ.log_omega
-log_exp = df_reg_Δ.log_expense
-log_ν   = df_reg_Δ.log_shock
-
-cov_z_D  = cov(z, log_D)
-cov_z_ω  = cov(z, log_ω)
-cov_z_E  = cov(z, log_exp)
-
-# Oracle bias (uses simulated log ω — not available in real data)
-bias_oracle   = cov_z_ω / cov_z_D
-γ̂_z_IV       = cov_z_E  / cov_z_D   # = plim of reg-7 estimate
-γ̂_ν_IV       = cov(z, log_ν) != 0 ?  # use ν-IV as the consistent benchmark
-                    coef(iv)[end] :    # coefficient on log_demand from reg 6
-                    NaN
-
-println("\n=== Bias Decomposition: Regression 7 (oracle, uses log ω) ===")
-println("Cov(z, log D)  [first stage]:   $(round(cov_z_D,      digits=6))")
-println("Cov(z, log ω)  [excl. viol.]:   $(round(cov_z_ω,      digits=6))")
-println("Cov(z, log E)  [reduced form]:  $(round(cov_z_E,      digits=6))")
-println("Bias = Cov(z,logω)/Cov(z,logD): $(round(bias_oracle,  digits=6))")
-println("γ̂_z-IV  (= γ + bias):           $(round(γ̂_z_IV,      digits=6))")
-println("True γ:                         $(params.γ)")
+# println("\nTrue γ: $(params.γ)")
 
 # # ---------------------------------------------------
-# # Iterative bias-corrected estimation
+# # Bias decomposition for regression 7
+# #
+# # True model:  log(expense_t) = α + γ·log(D_t) + log(ω_t)
+# # Instrument:  z_t = Δ(inv/sales)_t
+# #
+# # IV plim:  γ̂_IV → γ  +  Cov(z, log ω) / Cov(z, log D)
+# #                         ─────────────────────────────
+# #                           bias from ω contaminating z
+# # ---------------------------------------------------
+# z       = df_reg_Δ.Δinv_sales
+# log_D   = df_reg_Δ.log_demand
+# log_ω   = df_reg_Δ.log_omega
+# log_exp = df_reg_Δ.log_expense
+# log_ν   = df_reg_Δ.log_shock
+
+# cov_z_D  = cov(z, log_D)
+# cov_z_ω  = cov(z, log_ω)
+# cov_z_E  = cov(z, log_exp)
+
+# # Oracle bias (uses simulated log ω — not available in real data)
+# bias_oracle   = cov_z_ω / cov_z_D
+# γ̂_z_IV       = cov_z_E  / cov_z_D   # = plim of reg-7 estimate
+# γ̂_ν_IV       = cov(z, log_ν) != 0 ?  # use ν-IV as the consistent benchmark
+#                     coef(iv)[end] :    # coefficient on log_demand from reg 6
+#                     NaN
+
+# println("\n=== Bias Decomposition: Regression 7 (oracle, uses log ω) ===")
+# println("Cov(z, log D)  [first stage]:   $(round(cov_z_D,      digits=6))")
+# println("Cov(z, log ω)  [excl. viol.]:   $(round(cov_z_ω,      digits=6))")
+# println("Cov(z, log E)  [reduced form]:  $(round(cov_z_E,      digits=6))")
+# println("Bias = Cov(z,logω)/Cov(z,logD): $(round(bias_oracle,  digits=6))")
+# println("γ̂_z-IV  (= γ + bias):           $(round(γ̂_z_IV,      digits=6))")
+# println("True γ:                         $(params.γ)")
+
+# # # ---------------------------------------------------
+# # # Iterative bias-corrected estimation
 # # ---------------------------------------------------
 # γ̂_BC, μω_est, σω2_est, ρω_est = estimate_gamma_bc(params, df_reg_Δ)
 # println("True γ:                     $(params.γ)")
