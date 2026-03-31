@@ -24,7 +24,7 @@ function estimate_gamma_bc(params::Parameters, df::DataFrame;
     γ̂_step1 = coef(iv)[end]
 
     log_ω_proxy = coef(iv)[1] .+ FixedEffectModels.residuals(iv, df)
-    μω_current, σω2_current, ρω_current = estimate_omega_ar1(log_ω_proxy, df.firm_boundary)
+    μω_current, σω2_current, ρω_current, _, _, _ = estimate_omega_ar1(log_ω_proxy, df.firm_boundary)
 
     println("\n=== Iterative Bias-Corrected Estimation ===")
     println("Step 1 — Initial γ̂ (z-IV):  $(round(γ̂_step1, digits=6))")
@@ -61,7 +61,7 @@ function estimate_gamma_bc(params::Parameters, df::DataFrame;
 
         # Re-estimate ω from original data using current γ̂
         log_ω_hat = df.log_expense .- γ̂_current .* df.log_demand
-        μ̂_ω_new, σ̂η2_new, ρ̂_ω_new = estimate_omega_ar1(log_ω_hat, df.firm_boundary)
+        μ̂_ω_new, σ̂η2_new, ρ̂_ω_new, _, _, _ = estimate_omega_ar1(log_ω_hat, df.firm_boundary)
 
         # Bias-corrected γ
         γ̂_BC_new = γ̂_step1 - bias_i
@@ -111,14 +111,35 @@ function estimate_omega_ar1(log_ω_proxy::AbstractVector{<:Real}, firm_boundary:
     keep = .!isnan.(lag)
     y    = log_ω_proxy[keep]
     x    = lag[keep]
+    T    = length(y)
+
     # OLS: y = a + ρ·x
     x̄, ȳ  = mean(x), mean(y)
-    ρω    = sum((x .- x̄) .* (y .- ȳ)) / sum((x .- x̄).^2)
+    Sxx   = sum((x .- x̄).^2)
+    ρω    = sum((x .- x̄) .* (y .- ȳ)) / Sxx
     a     = ȳ - ρω * x̄
     resid = y .- (a .+ ρω .* x)
+    σ²_u  = sum(resid.^2) / (T - 2)          # OLS residual variance (df-corrected)
+
+    # Standard errors of (a, ρω) from OLS sandwich
+    se_ρω = sqrt(σ²_u / Sxx)
+    se_a  = sqrt(σ²_u * (1/T + x̄^2 / Sxx))
+
     μω    = exp(a / (1 - ρω))   # unconditional mean level
-    σω2   = var(resid)          # innovation variance
-    return μω, σω2, ρω
+    σω2   = σ²_u                # innovation variance (= σ²_u)
+
+    # Delta-method SE for μω = exp(a/(1-ρω))
+    # ∂μω/∂a  = μω / (1-ρω)
+    # ∂μω/∂ρω = μω * a / (1-ρω)²
+    dμ_da  = μω / (1 - ρω)
+    dμ_dρ  = μω * a / (1 - ρω)^2
+    # Approx (ignoring covariance of a and ρω — conservative)
+    se_μω  = sqrt((dμ_da * se_a)^2 + (dμ_dρ * se_ρω)^2)
+
+    # SE for σω2 = σ²_u: var of sample variance ≈ 2σ⁴/(T-2)
+    se_σω2 = sqrt(2 * σω2^2 / max(T - 2, 1))
+
+    return μω, σω2, ρω, se_μω, se_σω2, se_ρω
 end
 
 
@@ -164,9 +185,12 @@ function compute_annual_auxiliary(df_annual::DataFrame)
     ols_result  = lm(@formula(log_opex ~ log_sales), df_ols)
     γ̂_OLS       = coef(ols_result)[end]
     log_ω_proxy = coef(ols_result)[1] .+ residuals(ols_result)
-    μ̂_ω, σ̂_η2, ρ̂_ω = estimate_omega_ar1(log_ω_proxy, df_ols.firm_boundary)
+    μ̂_ω, σ̂_η2, ρ̂_ω, se_μω, se_σω2, se_ρω =
+        estimate_omega_ar1(log_ω_proxy, df_ols.firm_boundary)
 
-    return (γ̂_OLS=γ̂_OLS, ρ̂_ω=ρ̂_ω, σ̂_η2=σ̂_η2, μ̂_ω=μ̂_ω, ols_result=ols_result)
+    return (γ̂_OLS=γ̂_OLS, ρ̂_ω=ρ̂_ω, σ̂_η2=σ̂_η2, μ̂_ω=μ̂_ω,
+            se_ρω=se_ρω, se_σω2=se_σω2, se_μω=se_μω,
+            ols_result=ols_result)
 end
 
 
@@ -271,7 +295,7 @@ function estimate_params_ii_annual(params_base::Parameters, df_annual::DataFrame
 
     # --- Step 0: auxiliary statistics from the data ---
     ψ̂ = compute_annual_auxiliary(df_annual)
-    ψ̂_vec = [ψ̂.γ̂_OLS, ψ̂.ρ̂_ω, ψ̂.σ̂_η2, ψ̂.μ̂_ω]
+    ψ̂_vec = [ψ̂.γ̂_OLS, ψ̂.ρ̂_ω, ψ̂.σ̂_η2, ψ̂.μ̂_ω]   # se_* not used in objective
     # Normalisation: weight inversely proportional to |ψ̂_k|²
     w_vec = [1.0 / max(abs(v), 1e-8)^2 for v in ψ̂_vec]
 

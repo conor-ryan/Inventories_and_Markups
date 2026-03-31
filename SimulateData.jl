@@ -213,6 +213,11 @@ println("Annual data written to  $annual_path")
 println("\n=== Auxiliary OLS Regression on Annual Data ===")
 ψ̂_data = compute_annual_auxiliary(df_annual)
 display(coeftable(ψ̂_data.ols_result))
+println("\n=== AR(1) moments of log-ω proxy (annual) ===")
+println("Parameter    Estimate       Std. Error")
+@printf("ρω           %10.6f    %10.6f\n", ψ̂_data.ρ̂_ω,   ψ̂_data.se_ρω)
+@printf("σω2          %10.6f    %10.6f\n", ψ̂_data.σ̂_η2,  ψ̂_data.se_σω2)
+@printf("μω (level)   %10.6f    %10.6f\n", ψ̂_data.μ̂_ω,   ψ̂_data.se_μω)
 
 println("\n=== Estimating γ, μω, σω2, ρω from Annual Data via Indirect Inference ===")
 ii_result = estimate_params_ii_annual(params, df_annual;
