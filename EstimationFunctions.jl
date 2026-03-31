@@ -132,8 +132,7 @@ end
 
 Compute four auxiliary statistics from an annual balanced panel:
 
-1. `γ̂_IV`  — IV estimate of γ: log(total_opex) ~ log(total_sales),
-              instrument = Δ(inv_to_sales)
+1. `γ̂_OLS` — OLS estimate of γ: log(total_opex) ~ log(total_sales)
 2. `ρ̂_ω`   — AR(1) persistence of annual log-ω proxy
 3. `σ̂_η2`  — AR(1) innovation variance of annual log-ω proxy
 4. `μ̂_ω`   — unconditional level mean of ω proxy
@@ -141,37 +140,33 @@ Compute four auxiliary statistics from an annual balanced panel:
 `df_annual` must have columns: `firm_id`, `year_id`, `total_opex`,
 `total_sales`, `inv_to_sales`.
 
-Returns a NamedTuple `(γ̂_IV, ρ̂_ω, σ̂_η2, μ̂_ω)`.
+Returns a NamedTuple `(γ̂_OLS, ρ̂_ω, σ̂_η2, μ̂_ω)`.
 """
 function compute_annual_auxiliary(df_annual::DataFrame)
     df = sort(df_annual, [:firm_id, :year_id])
     n  = nrow(df)
 
-    Δisr_vec     = fill(NaN, n)
     firm_bnd_vec = falses(n)
     firm_bnd_vec[1] = true
     for i in 2:n
         if df.firm_id[i] != df.firm_id[i - 1]
             firm_bnd_vec[i] = true
-        else
-            Δisr_vec[i] = df.inv_to_sales[i] - df.inv_to_sales[i - 1]
         end
     end
 
-    valid = (df.total_opex .> 0) .& (df.total_sales .> 0) .& .!isnan.(Δisr_vec)
-    df_iv = DataFrame(
+    valid = (df.total_opex .> 0) .& (df.total_sales .> 0)
+    df_ols = DataFrame(
         log_opex      = log.(df.total_opex[valid]),
         log_sales     = log.(df.total_sales[valid]),
-        Δisr          = Δisr_vec[valid],
         firm_boundary = firm_bnd_vec[valid]
     )
 
-    iv_result  = reg(df_iv, @formula(log_opex ~ (log_sales ~ Δisr)))
-    γ̂_IV       = coef(iv_result)[end]
-    log_ω_proxy = coef(iv_result)[1] .+ FixedEffectModels.residuals(iv_result, df_iv)
-    μ̂_ω, σ̂_η2, ρ̂_ω = estimate_omega_ar1(log_ω_proxy, df_iv.firm_boundary)
+    ols_result  = lm(@formula(log_opex ~ log_sales), df_ols)
+    γ̂_OLS       = coef(ols_result)[end]
+    log_ω_proxy = coef(ols_result)[1] .+ residuals(ols_result)
+    μ̂_ω, σ̂_η2, ρ̂_ω = estimate_omega_ar1(log_ω_proxy, df_ols.firm_boundary)
 
-    return (γ̂_IV=γ̂_IV, ρ̂_ω=ρ̂_ω, σ̂_η2=σ̂_η2, μ̂_ω=μ̂_ω)
+    return (γ̂_OLS=γ̂_OLS, ρ̂_ω=ρ̂_ω, σ̂_η2=σ̂_η2, μ̂_ω=μ̂_ω)
 end
 
 
@@ -276,13 +271,13 @@ function estimate_params_ii_annual(params_base::Parameters, df_annual::DataFrame
 
     # --- Step 0: auxiliary statistics from the data ---
     ψ̂ = compute_annual_auxiliary(df_annual)
-    ψ̂_vec = [ψ̂.γ̂_IV, ψ̂.ρ̂_ω, ψ̂.σ̂_η2, ψ̂.μ̂_ω]
+    ψ̂_vec = [ψ̂.γ̂_OLS, ψ̂.ρ̂_ω, ψ̂.σ̂_η2, ψ̂.μ̂_ω]
     # Normalisation: weight inversely proportional to |ψ̂_k|²
     w_vec = [1.0 / max(abs(v), 1e-8)^2 for v in ψ̂_vec]
 
     if verbose
         println("\n=== Indirect Inference: Annual Data Auxiliary Statistics ===")
-        @printf("  γ̂_IV  = %10.6f\n",  ψ̂.γ̂_IV)
+        @printf("  γ̂_OLS = %10.6f\n",  ψ̂.γ̂_OLS)
         @printf("  ρ̂_ω   = %10.6f  (annual)\n", ψ̂.ρ̂_ω)
         @printf("  σ̂²_η  = %10.6f  (annual)\n", ψ̂.σ̂_η2)
         @printf("  μ̂_ω   = %10.6f  (level)\n",  ψ̂.μ̂_ω)
@@ -316,7 +311,7 @@ function estimate_params_ii_annual(params_base::Parameters, df_annual::DataFrame
             _, _, _, _, ppi, opi, _ = solve_model(params_iter)
             df_sim = _simulate_and_get_annual(params_iter, ppi, opi, n_firms, n_years, seed)
             ψ̃ = compute_annual_auxiliary(df_sim)
-            ψ̃_vec = [ψ̃.γ̂_IV, ψ̃.ρ̂_ω, ψ̃.σ̂_η2, ψ̃.μ̂_ω]
+            ψ̃_vec = [ψ̃.γ̂_OLS, ψ̃.ρ̂_ω, ψ̃.σ̂_η2, ψ̃.μ̂_ω]
             sse = sum(w_vec[k] * (ψ̂_vec[k] - ψ̃_vec[k])^2 for k in 1:4)
 
             if verbose
