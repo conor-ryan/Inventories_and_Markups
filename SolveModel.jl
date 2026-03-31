@@ -2,7 +2,7 @@ using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Plots, Interpola
 include("ModelFunctions.jl")
 include("EstimationFunctions.jl")
 
-params = Parameters(c=1.2, fc=0.0, μω=0.1,σω2=0.05,ρ_ω=0.1, γ=0.9,δ=0.05, β=0.95, ϵ=6.0, μν=100, σν2=exp(7), Smax=50, Ns=200,scale=1.0,size=3.0)
+params = Parameters(c=1.0, fc=0.0, μω=0.2,σω2=0.05,ρ_ω=0.1, γ=0.9,δ=0.01, β=0.95, ϵ=8.0, μν=100, σν2=exp(7), Smax=100, Ns=200,scale=1.0,size=3.0)
 
 Sgrid = params.Sgrid
 Smax = params.Smax
@@ -72,8 +72,8 @@ println("Average Stockout Probability: $(round(stats.avg_stockout, digits=4))")
 println("Variance of Stockout Probability: $(round(stats.var_stockout, digits=4))")
 println("Correlation (Markup, Inventory): $(round(stats.corr_markup_inventory, digits=4))")
 println("Correlation (Markup, Inventory-to-Sales Ratio): $(round(stats.corr_markup_inventory_ratio, digits=4))")
-println("Average Inventory-to-Sales Ratio: $(round(stats.inv_to_sales_ratio_avg, digits=4))")
-println("Variance of Inventory-to-Sales Ratio: $(round(stats.inv_to_sales_ratio_var, digits=4))")
+println("Average Inv-to-Sales Ratio (Avg Inv / Revenue): $(round(stats.inv_to_sales_ratio_avg, digits=4))")
+println("Variance of Inv-to-Sales Ratio (Avg Inv / Revenue): $(round(stats.inv_to_sales_ratio_var, digits=4))")
 
 
 # ---------------------------------------------------
@@ -109,9 +109,17 @@ p5 = plot(Sgrid, [stockouts stockouts_by_omega[:, j_low] stockouts_by_omega[:, j
     label=ω_slice_labels, linewidth=2, linestyle=[:solid :dash :dot :dashdot])
 p6 = plot(Sgrid, value_derivative, xlabel="Inventory Level (s)", ylabel="dV/dS", title="Value Function Derivative", legend=false, linewidth=2)
 hline!(p6, [params.c/(params.β*(1-params.δ))], linewidth=2, linestyle=:dash, color=:red, label="params.c")
-p7 = histogram(inventory_sim, xlabel="Inventory Level (s)", ylabel="Frequency", title="Simulated Inventory Distribution", legend=false, binwidth=4)
-p8 = histogram(min.(demand_shocks_sim, 5000), xlabel="Demand Shock (ν)", ylabel="Frequency", title="Demand Shocks", legend=false,bins=30)
-p9 = histogram(demand_levels_sim, xlabel="Demand (D)", ylabel="Frequency", title="Realized Demand", legend=false, binwidth=4)
+isr_qty = filter(x -> isfinite(x) && x > 0, inventory_sim ./ max.(demand_levels_sim, eps()))
+p7 = histogram(isr_qty, xlabel="Inventory / Sales (quantity)", ylabel="Frequency", title="Inv-to-Sales Ratio (Quantity)", legend=false, bins=50)
+isr_rev = filter(x -> isfinite(x) && x > 0, inv_sales_ratio_sim ./ params.c)
+p8 = histogram(isr_rev, xlabel="Inventory / Sales (revenue)", ylabel="Frequency", title="Inv-to-Sales Ratio (Revenue)", legend=false, bins=50)
+let
+    revenue_sim = params.c .* inventory_sim ./ inv_sales_ratio_sim   # p·D = c·s / (c·s/(p·D))
+    valid9      = (inv_sales_ratio_sim .> 0) .& isfinite.(revenue_sim) .& (revenue_sim .> 0)
+    isr_bom_rev = filter(isfinite, inventory_sim[valid9] ./ revenue_sim[valid9])
+    global p9   = histogram(isr_bom_rev, xlabel="BOM Inventory / Revenue", ylabel="Frequency",
+                            title="Inv-to-Sales Ratio (BOM Inv, Revenue)", legend=false, bins=50)
+end
 # p10 = plot(Sgrid, expected_nu_value_derivative,
 # xlabel="Inventory Level (s)",
 # ylabel="E[νV'(s')|s] / E[ν|ν≤ν̄(s)]",
@@ -251,9 +259,9 @@ println("Bias = Cov(z,logω)/Cov(z,logD): $(round(bias_oracle,  digits=6))")
 println("γ̂_z-IV  (= γ + bias):           $(round(γ̂_z_IV,      digits=6))")
 println("True γ:                         $(params.γ)")
 
-# ---------------------------------------------------
-# Iterative bias-corrected estimation
-# ---------------------------------------------------
-γ̂_BC, μω_est, σω2_est, ρω_est = estimate_gamma_bc(params, df_reg_Δ)
-println("True γ:                     $(params.γ)")
-println("True  ω parameters —  μω: $(round(0.1, digits=6))         σω2: $(round(params.σω2, digits=6))   ρω: $(round(params.ρ_ω, digits=6))")
+# # ---------------------------------------------------
+# # Iterative bias-corrected estimation
+# # ---------------------------------------------------
+# γ̂_BC, μω_est, σω2_est, ρω_est = estimate_gamma_bc(params, df_reg_Δ)
+# println("True γ:                     $(params.γ)")
+# println("True  ω parameters —  μω: $(round(0.1, digits=6))         σω2: $(round(params.σω2, digits=6))   ρω: $(round(params.ρ_ω, digits=6))")

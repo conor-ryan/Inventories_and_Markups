@@ -651,9 +651,9 @@ function compute_firm_statistics(N::Int, T::Int, price_policy_interp, order_poli
             ν = rand(params.dist)
             D = min(ν * p_opt^(-params.ϵ), s_current)
             push!(all_sales, D)
-            push!(all_ratio, s_current / max(D, eps()))
-
-            s_end = s_current - D
+            revenue = p_opt * D
+            push!(all_ratio, revenue > 0.0 ? s_current / revenue : NaN)
+            s_end   = s_current - D
 
             s_current = (1 - params.δ) * (s_end + n_opt)
             s_current = max(s_current, 0.0)
