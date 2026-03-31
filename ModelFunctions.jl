@@ -1,0 +1,968 @@
+using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Interpolations
+
+# ---------------------------------------------------
+# Parameters struct (matches SolveModel.jl)
+# ---------------------------------------------------
+struct Parameters
+    c::Float64
+    fc::Float64
+    μω::Float64               # unconditional mean of log(ω)
+    σω2::Float64              # AR(1) innovation variance σ_η^2
+    σω::Float64               # AR(1) innovation std σ_η
+    ρ_ω::Float64              # AR(1) persistence of log(ω)
+    Q_ω::Int64                # number of omega grid points
+    ω_grid::Vector{Float64}   # Qω omega values in levels
+    P_ω::Matrix{Float64}      # Qω × Qω Tauchen transition matrix (row = current state)
+    π_ω::Vector{Float64}      # ergodic stationary distribution over omega grid
+    γ::Float64
+    δ::Float64
+    β::Float64
+    ϵ::Float64
+    μν::Float64
+    σν2::Float64
+    σν::Float64
+    σν2_level::Float64
+    dist::LogNormal
+    Q::Int64
+    quad_nodes::Vector{Float64}
+    quad_weights::Vector{Float64}
+    quad_nodes_lognormal::Vector{Float64}
+    Smax::Float64
+    Ns::Int64
+    Sgrid::Vector{Float64}
+
+    function Parameters(; c=1.0, fc=0.0, μω=1.0, σω2=0.0, ρ_ω=0.9, γ=1.0, δ=0.2, β=0.95, ϵ=2.0, μν=100, σν2=2832, Q=19, Q_ω=7, scale=1.0, size=1.0, Smax=50.0, Ns=800)
+        x, w = gausshermite(Q)
+
+        scale_parameter = scale^(ϵ)
+        c = c * scale
+        μν = μν * scale_parameter * size
+        σν2 = σν2 * scale_parameter^2 * size^2
+
+        # Compute log-space parameters from mean and variance of ν
+        σ2 = log(1 + σν2 / μν^2)
+        σ  = sqrt(σ2)
+        μ  = log(μν) - 0.5 * σ2
+
+        # Transform quadrature nodes to lognormal draws (ν-space)
+        x_lognormal = [exp(μ + sqrt(2) * σ * x[i]) for i in 1:Q]
+
+        # AR(1) for log(ω): log(ω_t) = μ_log_ω + ρ_ω*(log(ω_{t-1}) - μ_log_ω) + σ_η * ε_t
+        # μω input is the level mean; store the log mean in params.μω
+        μ_log_ω = log(μω)
+        σ_η     = sqrt(max(σω2, 0.0))
+
+        # Tauchen discretization of the AR(1) in log(ω)
+        if σω2 <= 0.0 || Q_ω <= 1
+            ω_grid_vec = [μω]
+            P_ω_mat    = ones(1, 1)
+            π_ω_vec    = [1.0]
+        else
+            σ_logω   = σ_η / sqrt(1.0 - ρ_ω^2)   # unconditional std of log(ω)
+            m_tau    = 3.0
+            log_ω_lo = μ_log_ω - m_tau * σ_logω
+            log_ω_hi = μ_log_ω + m_tau * σ_logω
+            log_ω_grid = collect(range(log_ω_lo, log_ω_hi, length=Q_ω))
+            h          = log_ω_grid[2] - log_ω_grid[1]
+            ω_grid_vec = exp.(log_ω_grid)
+
+            P_ω_mat = zeros(Q_ω, Q_ω)
+            for i in 1:Q_ω
+                cond_mean = μ_log_ω + ρ_ω * (log_ω_grid[i] - μ_log_ω)
+                for j in 1:Q_ω
+                    if j == 1
+                        P_ω_mat[i, j] = cdf(Normal(), (log_ω_grid[j] + h / 2 - cond_mean) / σ_η)
+                    elseif j == Q_ω
+                        P_ω_mat[i, j] = 1.0 - cdf(Normal(), (log_ω_grid[j] - h / 2 - cond_mean) / σ_η)
+                    else
+                        P_ω_mat[i, j] = cdf(Normal(), (log_ω_grid[j] + h / 2 - cond_mean) / σ_η) -
+                                         cdf(Normal(), (log_ω_grid[j] - h / 2 - cond_mean) / σ_η)
+                    end
+                end
+                P_ω_mat[i, :] ./= sum(P_ω_mat[i, :])   # normalize row
+            end
+
+            # Ergodic stationary distribution via power iteration
+            π_ω_vec = ones(Q_ω) / Q_ω
+            for _ in 1:2000
+                π_ω_vec = P_ω_mat' * π_ω_vec
+            end
+            π_ω_vec ./= sum(π_ω_vec)
+        end
+
+        # Create inventory state grid
+        Sgrid_vec = collect(range(1e-4, Smax, length=Ns))
+
+        new(c, fc, μ_log_ω, σω2, σ_η, ρ_ω, length(ω_grid_vec), ω_grid_vec, P_ω_mat, π_ω_vec,
+            γ, δ, β, ϵ, μ, σ2, σ, σν2, LogNormal(μ, σ), Q, x, w, x_lognormal, Smax, Ns, Sgrid_vec)
+    end
+end
+
+
+"""
+    update_parameters(params::Parameters, x::Vector{Float64})
+    
+Create a new Parameters object with updated depreciation rate (δ), 
+demand variance (σν2), and demand elasticity (ϵ).
+
+Takes:
+- params: Existing Parameters object
+- x: Vector of length 3 containing [δ, σν2, ϵ]
+
+Returns a new Parameters object with updated values.
+"""
+function update_parameters(params::Parameters, x::Vector{Float64})
+    if length(x) != 3
+        error("Input vector must have length 3: [δ, σν2, ϵ]")
+    end
+    
+    δ_new = x[1]
+    σν2_new = exp(x[2])
+    ϵ_new = x[3]
+    
+    # # Recalculate log-space parameters with new σν2 and ϵ
+    # scale_parameter = (1.0)^(ϵ_new)  # scale is 1.0 by default in our use case
+    # μν_scaled = params.μν  # Already stored in log space, but need original for calculation
+    # σ2_new = log(1 + σν2_new / (exp(params.μν) + 0.5 * params.σν^2)^2)
+    # σ_new = sqrt(σ2_new)
+    μ_params = exp(params.μν + 0.5 * params.σν^2) 
+    
+    # # Transform quadrature nodes to lognormal draws (v-space) with new σ and μ
+    # x_lognormal_new = [exp(μ_new + sqrt(2) * σ_new * params.quad_nodes[i]) for i in 1:params.Q]
+    
+    # Create new Parameters object
+    return Parameters(
+        c   = params.c,
+        fc  = params.fc,
+        μω  = exp(params.μω),   # params.μω stores log-mean; constructor expects level mean
+        σω2 = params.σω2,
+        ρ_ω = params.ρ_ω,
+        γ   = params.γ,
+        δ   = δ_new,
+        β   = params.β,
+        ϵ   = ϵ_new,
+        μν  = μ_params,
+        σν2 = σν2_new,
+        Q   = params.Q,
+        Q_ω = params.Q_ω,
+        Smax = params.Smax,
+        Ns   = params.Ns
+    )
+end
+
+
+"""
+    solve_price_policy(params)
+    
+Solve the price policy using the residual equation.
+Returns the price policy vector.
+"""
+function solve_price_policy(params::Parameters, c_tilde::Float64, ω::Float64)
+    Sgrid = params.Sgrid
+    Ns = params.Ns
+    p_policy = zeros(Ns)
+    
+    for (i, s) in enumerate(Sgrid)
+
+        obj(p) = price_residual(p, s, c_tilde, ω, params)^2
+        result = Optim.optimize(obj, 1e-3, 50.0, Brent(), rel_tol=1e-16, abs_tol=1e-12)
+        p_policy[i] = result.minimizer
+    end
+    
+    return p_policy
+end
+
+
+"""
+    price_residual(p, s, params)
+
+Compute pricing residual matching SolveModel.jl
+"""
+function price_residual(p, s, c_tilde, ω, params)
+    νbar = s * p^params.ϵ
+
+    Fbar = cdf(params.dist, νbar)
+    tail = 1.0 - Fbar
+
+    # avoid numerical issues
+    if Fbar < 1e-10
+        return 1e6
+    end
+
+    Eν = truncated_lognormal_mean(νbar, params)
+
+    opp_mc = ω * params.γ*p^(params.ϵ*(1-params.γ))
+    rhs = (params.ϵ / (params.ϵ - 1)) *(opp_mc +  c_tilde) +
+          (1 / (params.ϵ - 1)) *
+          s * p^(params.ϵ + 1) *
+          (1 / Eν) *
+          (tail / Fbar)
+
+    err = p - rhs
+
+    return err
+end
+
+
+"""
+    solve_value_function(p_policy, params; tol=1e-6, maxiter=1000)
+    
+Solve the value function using value function iteration.
+Returns the value function and optimal order policy.
+"""
+function solve_value_function(params; tol=1e-4, maxiter=1000, full=false)
+    Sgrid = params.Sgrid
+    Ns = params.Ns
+    ω_grid = params.ω_grid
+    P_ω = params.P_ω
+    Nω = params.Q_ω
+
+    # V_by_omega[i, j] = V(s_i, ω_j).  Both inventory and ω are state variables.
+    V_by_omega     = zeros(Ns, Nω)
+    V_by_omega_new = similar(V_by_omega)
+
+    # Policy matrices (Ns × Nω)
+    n_policy_current = zeros(Ns, Nω)
+    c_tilde = params.c
+    p_policy_current = zeros(Ns, Nω)
+
+    diff = Inf
+    iter = 0
+
+    # Initial price guess via static FOC for each ω state
+    for j in 1:Nω
+        p_policy_current[:, j] .= solve_price_policy(params, c_tilde, ω_grid[j])
+    end
+
+    while diff > tol && iter < maxiter
+        for j in 1:Nω
+            # State-conditional continuation: E[V(s', ω') | ω_j] for each next-period s'
+            EV_cont_j = V_by_omega * P_ω[j, :]
+            Vinterp_j = LinearInterpolation(Sgrid, EV_cont_j, extrapolation_bc=Line())
+
+            n_upper = maximum(Sgrid)
+            for i in 1:Ns
+                n_t, v = maximize_expected_value_choice(i, view(p_policy_current, :, j), ω_grid[j], Vinterp_j, params, n_upper=n_upper)
+                V_by_omega_new[i, j] = v
+                n_policy_current[i, j] = n_t
+                if n_t > 0.0
+                    n_upper = n_t
+                end
+            end
+        end
+
+        diff = maximum(abs.(V_by_omega_new .- V_by_omega))
+        V_by_omega .= V_by_omega_new
+        iter += 1
+    end
+
+    println("Initial Value Function Solved at $iter iterations")
+
+    if full
+        p_lower = params.c * 0.5
+        p_upper = maximum(p_policy_current) * 2.0
+        diff = Inf
+        iter = 0
+        maxiter = 500
+        n_policy_prev = copy(n_policy_current)
+        p_policy_prev = copy(p_policy_current)
+
+        while diff > tol && iter < maxiter
+            for j in 1:Nω
+                EV_cont_j = V_by_omega * P_ω[j, :]
+                Vinterp_j = LinearInterpolation(Sgrid, EV_cont_j, extrapolation_bc=Line())
+
+                n_upper_curr = maximum(Sgrid)
+                p_upper_curr = p_upper
+                for i in 1:Ns
+                    n_t, p_t, v = maximize_expected_value_choice(i, ω_grid[j], Vinterp_j, params,
+                        n0=n_policy_prev[i, j], p0=p_policy_prev[i, j],
+                        p_lower=p_lower, p_upper=p_upper_curr, n_upper=n_upper_curr)
+                    V_by_omega_new[i, j] = v
+                    n_policy_current[i, j] = n_t
+                    p_policy_current[i, j] = p_t
+                    if n_t > 0.0
+                        n_upper_curr = n_t * 1.01
+                    end
+                    p_upper_curr = p_t * 1.01
+                end
+            end
+
+            diff = max(maximum(abs.(n_policy_current .- n_policy_prev)),
+                       maximum(abs.(p_policy_current .- p_policy_prev)),
+                       maximum(abs.(V_by_omega_new .- V_by_omega)))
+
+            n_policy_prev .= n_policy_current
+            p_policy_prev .= p_policy_current
+            V_by_omega .= V_by_omega_new
+            iter += 1
+            println("At Iteration $iter, Error: $diff")
+        end
+
+        println("Full Value Function Solved at $iter iterations")
+    end
+
+    # Ex-ante value: average over ergodic ω distribution
+    V = V_by_omega * params.π_ω
+    return V, n_policy_current, p_policy_current, V_by_omega
+end
+
+
+
+"""
+    truncated_lognormal_mean(νbar, params)
+    
+Compute the truncated mean of the lognormal distribution.
+"""
+function truncated_lognormal_mean(νbar, params)
+    # Use stored log-space parameters (matching SolveModel.jl)
+    σ2 = params.σν2
+    σ  = params.σν
+    μ  = params.μν
+
+    z1 = (log(νbar) - μ - σ2) / σ
+    z0 = (log(νbar) - μ) / σ
+
+    return exp(μ + 0.5 * σ2) * cdf(Normal(), z1) / cdf(Normal(), z0)
+end
+
+
+"""
+    stockout_probability(s, p, params)
+    
+Compute the stockout probability given inventory s and price p.
+"""
+function stockout_probability(s, p, params)
+    νbar = s * p^params.ϵ
+    return 1.0 - cdf(params.dist, νbar)
+end
+
+
+"""
+    expected_demand(s, p, params)
+
+Compute expected demand (matches SolveModel.jl)
+"""
+function expected_demand(s, p, params)
+
+    νbar = s * p^params.ϵ
+
+    # Probabilities
+    Fbar = cdf(params.dist, νbar)
+
+    Eν_trunc = truncated_lognormal_mean(νbar, params)
+
+    # Expected demand
+    return p^(-params.ϵ) * Eν_trunc * Fbar +
+           s * (1 - Fbar)
+end
+
+
+### Total Operating Expenses
+
+function operating_expense(ω, d,params)
+    return ω*d^(params.γ)
+end
+
+
+"""
+    shock_specific_value(n, s_i, Sgrid, p_policy, ν, Vinterp, params)
+    
+Compute the firm value for a specific demand shock.
+"""
+function shock_specific_value(n::Float64, s_i::Int, p_policy::AbstractVector{Float64}, ν::Float64, ω::Float64, Vinterp, params::Parameters)::Float64
+    Sgrid = params.Sgrid
+    p = p_policy[s_i]
+    s = Sgrid[s_i]
+    D = min(ν * p^(-params.ϵ), s)
+    s_tilde = s - D + n
+    opp_cost = ω * D^(params.γ)
+
+    order_cost = if n > 0
+        params.fc + params.c * n
+    else
+        0.0
+    end
+
+    return p * D - opp_cost - order_cost + params.β * Vinterp((1 - params.δ) * s_tilde)
+end
+
+
+"""
+    expected_value_choice(n, s_i, Sgrid, p_policy, Vinterp, params)
+    
+Compute the expected value of choosing order quantity n.
+"""
+function expected_value_choice(n::Float64, s_i::Int, p_policy::AbstractVector{Float64}, ω::Float64, Vinterp, params::Parameters)::Float64
+    w = params.quad_weights
+    ν_nodes = params.quad_nodes_lognormal
+
+    EV = 0.0
+
+    for i in 1:params.Q
+        EV += w[i] * shock_specific_value(n, s_i, p_policy, ν_nodes[i], ω, Vinterp, params)
+    end
+
+    return EV / sqrt(pi)
+end
+
+
+#### Payoffs depending on both n and p
+
+function shock_specific_value(n::Float64, p::Float64, s_i::Int, ν::Float64, ω::Float64, Vinterp, params::Parameters)::Float64
+    Sgrid = params.Sgrid
+    s = Sgrid[s_i]
+    D = min(ν * p^(-params.ϵ), s)
+    s_tilde = s - D + n
+    opp_cost = ω * D^(params.γ)
+
+    order_cost = if n > 0
+        params.fc + params.c * n
+    else
+        0.0
+    end
+
+    return p * D - opp_cost - order_cost + params.β * Vinterp((1 - params.δ) * s_tilde)
+end
+
+
+function expected_value_choice(n::Float64, p::Float64, s_i::Int, ω::Float64, Vinterp, params::Parameters)::Float64
+    w = params.quad_weights
+    ν_nodes = params.quad_nodes_lognormal
+
+    EV = 0.0
+
+    for i in 1:params.Q
+        EV += w[i] * shock_specific_value(n, p, s_i, ν_nodes[i], ω, Vinterp, params)
+    end
+
+    return EV / sqrt(pi)
+end
+
+
+
+"""
+    maximize_expected_value_choice(s_i, p_policy, Vinterp, params; n0=nothing)
+    
+Maximize the expected value over the order quantity n.
+"""
+function maximize_expected_value_choice(s_i::Int, p_policy::AbstractVector{Float64}, ω::Float64, Vinterp, params::Parameters; n0::Union{Nothing, Float64}=nothing, n_upper::Float64=maximum(params.Sgrid))
+    Sgrid = params.Sgrid
+    function obj(n)
+        value = expected_value_choice(n, s_i, p_policy, ω, Vinterp, params)
+        return -value
+    end
+    
+    if isnothing(n0)
+        n0 = 5.0
+    end
+    
+    lower = 0.0
+    upper = n_upper
+    
+    result = Optim.optimize(obj, lower, upper, Brent(), rel_tol=1e-12, abs_tol=1e-12)
+    
+    n_opt = result.minimizer
+    value_max = -result.minimum
+
+    no_order_value = expected_value_choice(0.0, s_i, p_policy, ω, Vinterp, params)
+    if value_max < no_order_value 
+        n_opt = 0.0
+        value_max = no_order_value
+    end
+    
+    return n_opt, value_max
+end
+
+
+"""
+    maximize_expected_value_choice(s_i, Vinterp, params; ...)
+
+Simultaneously finds the optimal price `p` and order `n` using `Fminbox(NelderMead())`
+for a given ω state value.
+"""
+function maximize_expected_value_choice(s_i::Int, ω::Float64, Vinterp, params::Parameters; n0::Union{Nothing, Float64}=nothing, p0::Union{Nothing, Float64}=nothing,
+                                             p_lower::Float64=1e-3, p_upper::Float64=50.0, n_upper::Float64=maximum(params.Sgrid))
+    lower = [0.0,   p_lower]
+    upper = [n_upper, p_upper]
+    if !isnothing(p0) && (p0 > p_upper)
+        p0 = p_lower + (p_upper - p_lower) / 2
+    end
+    if !isnothing(n0) && (n0 > n_upper)
+        n0 = n_upper / 2
+    end
+    x0 = [clamp(isnothing(n0) ? 5.0 : n0, 0.0, n_upper),
+          clamp(isnothing(p0) ? params.c * params.ϵ / (params.ϵ - 1) : p0, p_lower, p_upper)]
+
+    obj(x) = -expected_value_choice(x[1], x[2], s_i, ω, Vinterp, params)
+
+    result    = Optim.optimize(obj, lower, upper, x0, Fminbox(NelderMead()))
+    n_opt     = result.minimizer[1]
+    p_opt     = result.minimizer[2]
+    value_max = -result.minimum
+
+    if !Optim.converged(result)
+        println("WARNING: optimizer did not converge at grid index s_i=$s_i (s=$(params.Sgrid[s_i]))")
+        println("  x0        = [n=$(x0[1]), p=$(x0[2])]")
+        println("  bounds    = n∈[$(lower[1]), $(upper[1])], p∈[$(lower[2]), $(upper[2])]")
+        println("  minimizer = [n=$(round(n_opt, digits=4)), p=$(round(p_opt, digits=4))]")
+        println("  minimum   = $(result.minimum)  (converged=$(Optim.converged(result)), iters=$(Optim.iterations(result)))")
+    end
+
+    return n_opt, p_opt, value_max
+end
+
+
+
+# ---------------------------------------------------
+# Markov chain helpers for ω draws
+# ---------------------------------------------------
+"""
+    draw_ω_index(params, current_idx)
+
+Draw the next ω grid index from row `current_idx` of the Tauchen transition matrix.
+"""
+function draw_ω_index(params::Parameters, current_idx::Int)
+    r = rand()
+    cumprob = 0.0
+    for k in 1:params.Q_ω
+        cumprob += params.P_ω[current_idx, k]
+        if r ≤ cumprob
+            return k
+        end
+    end
+    return params.Q_ω
+end
+
+"""
+    draw_ω_index_ergodic(params)
+
+Draw an initial ω grid index from the ergodic stationary distribution `π_ω`.
+"""
+function draw_ω_index_ergodic(params::Parameters)
+    r = rand()
+    cumprob = 0.0
+    for k in 1:params.Q_ω
+        cumprob += params.π_ω[k]
+        if r ≤ cumprob
+            return k
+        end
+    end
+    return params.Q_ω
+end
+
+
+# ---------------------------------------------------
+# Simulation of firm dynamics
+# ---------------------------------------------------
+function simulate_firm(num_simulations::Int, num_periods::Int, price_policy_interp, order_policy_interp, params)
+    """
+    Simulate firm inventory dynamics over multiple periods and simulations.
+    Returns vectors of beginning-of-period inventory, demand shocks, and demand levels.
+    """
+    Sgrid = params.Sgrid
+    all_inventory_levels = Float64[]
+    all_inventory_levels_eop = Float64[]
+    all_demand_shocks = Float64[]
+    all_demand_levels = Float64[]
+    all_expenses = Float64[]
+    all_cost_shocks = Float64[]
+    all_inv_sales_ratio = Float64[]
+    
+    for sim in 1:num_simulations
+        # Random starting inventory; initial ω drawn from ergodic distribution
+        s_current = rand(Sgrid)
+        ω_idx     = draw_ω_index_ergodic(params)
+
+        for period in 1:num_periods
+            # Record beginning-of-period inventory
+            push!(all_inventory_levels, s_current)
+
+            ω_current = params.ω_grid[ω_idx]
+
+            # Get optimal price and order quantity using interpolation
+            p_opt = price_policy_interp(s_current, ω_current)
+
+            # Find closest grid point for order policy
+            n_opt = order_policy_interp(s_current, ω_current)
+
+            # Draw demand shock from lognormal
+            ν = rand(params.dist)
+            push!(all_demand_shocks, ν)
+            push!(all_cost_shocks,ω_current)
+
+            # Calculate demand
+            D = min(ν * p_opt^(-params.ϵ), s_current)
+            push!(all_demand_levels, D)
+
+            # Calculate operating expenses
+            c_opp = operating_expense(ω_current,D,params)
+            push!(all_expenses,c_opp)
+
+            # Inventory to Sales Ratio
+            curr_ratio = params.c*s_current/(p_opt*D)
+            push!(all_inv_sales_ratio,curr_ratio)
+
+            # Ending inventory after demand
+            s_end = s_current - D
+            push!(all_inventory_levels_eop, s_end)
+
+            # Next period beginning inventory: order + depreciation
+            s_current = (1 - params.δ) * (s_end + n_opt)
+
+            # Transition ω for next period via Markov chain
+            ω_idx = draw_ω_index(params, ω_idx)
+        end
+    end
+    
+    return all_inventory_levels, all_demand_shocks, all_demand_levels, all_inventory_levels_eop,
+                    all_expenses, all_cost_shocks, all_inv_sales_ratio
+end
+
+
+"""
+    compute_firm_statistics(N::Int, T::Int, price_policy_interp, order_policy_interp, params)
+    
+Simulate N firms for T periods and compute statistics.
+Returns a named tuple with all statistics.
+"""
+function compute_firm_statistics(N::Int, T::Int, price_policy_interp, order_policy_interp, params)
+    Sgrid = params.Sgrid
+    all_inventories = Float64[]
+    all_markups = Float64[]
+    all_stockouts = Float64[]
+    all_sales = Float64[]
+    all_ratio = Float64[]
+    
+    for firm in 1:N
+        s_current = rand(Sgrid)
+        ω_idx     = draw_ω_index_ergodic(params)
+
+        for period in 1:T
+            ω_current = params.ω_grid[ω_idx]
+
+            p_opt = price_policy_interp(s_current, ω_current)
+            n_opt = order_policy_interp(s_current, ω_current)
+
+            push!(all_inventories, s_current)
+            push!(all_markups, p_opt / params.c)
+            push!(all_stockouts, stockout_probability(s_current, p_opt, params))
+
+            ν = rand(params.dist)
+            D = min(ν * p_opt^(-params.ϵ), s_current)
+            push!(all_sales, D)
+            push!(all_ratio, s_current / max(D, eps()))
+
+            s_end = s_current - D
+
+            s_current = (1 - params.δ) * (s_end + n_opt)
+            s_current = max(s_current, 0.0)
+
+            # Transition ω for next period via Markov chain
+            ω_idx = draw_ω_index(params, ω_idx)
+        end
+    end
+
+    avg_sales = mean(all_sales)
+    valid_ratio = all_ratio[isfinite.(all_ratio)]
+    inv_to_sales_ratio_avg = mean(valid_ratio)
+    inv_to_sales_ratio_var = var(valid_ratio)
+    inv_to_sales_log_ratio_var = var(log.(1.0 .+ valid_ratio))
+    
+    corr_markup_inv = cor(all_inventories, all_markups)
+    corr_markup_inv_ratio = cor(all_ratio[all_inventories .> 0], all_markups[all_inventories .> 0])
+    
+    return (
+        avg_inventory = mean(all_inventories),
+        var_inventory = var(all_inventories),
+        avg_markup = mean(all_markups),
+        var_markup = var(all_markups),
+        avg_stockout = mean(all_stockouts),
+        var_stockout = var(all_stockouts),
+        corr_markup_inventory = corr_markup_inv,
+        corr_markup_inventory_ratio = corr_markup_inv_ratio,
+        avg_sales = avg_sales,
+        inv_to_sales_ratio_avg = inv_to_sales_ratio_avg,
+        inv_to_sales_ratio_var = inv_to_sales_ratio_var,
+        inv_to_sales_log_ratio_var = inv_to_sales_log_ratio_var
+    )
+end
+
+
+"""
+    solve_model(params; verbose=false)
+    
+Solve the complete model: price policy, value function, and order policy.
+Returns (p_policy, order_policy, V, price_policy_interp, order_policy_interp, Vinterp)
+"""
+function solve_model(params; full=false, verbose=false)
+    Sgrid  = params.Sgrid
+    ω_grid = params.ω_grid
+    Nω     = params.Q_ω
+
+    if verbose
+        println("Solving value function...")
+    end
+    V, order_policy, p_policy, V_by_omega = solve_value_function(params, full=full)
+
+    # Build s-interpolation at each omega grid point; use nearest-grid-point lookup in omega.
+    price_policy_interp_nodes = [LinearInterpolation(Sgrid, p_policy[:, j], extrapolation_bc=Line()) for j in 1:Nω]
+    order_policy_interp_nodes = [LinearInterpolation(Sgrid, order_policy[:, j], extrapolation_bc=Line()) for j in 1:Nω]
+
+    price_policy_interp = (s, ω) -> begin
+        j = argmin(abs.(ω_grid .- ω))
+        return price_policy_interp_nodes[j](s)
+    end
+
+    order_policy_interp = (s, ω) -> begin
+        j = argmin(abs.(ω_grid .- ω))
+        return order_policy_interp_nodes[j](s)
+    end
+
+    Vinterp = LinearInterpolation(Sgrid, V, extrapolation_bc=Line())
+
+    return p_policy, order_policy, V, V_by_omega, price_policy_interp, order_policy_interp, Vinterp
+end
+
+
+"""
+    compute_inventory_transition_matrix(params::Parameters, price_policy_fn, order_policy_fn)
+
+Build the Markov transition matrix over inventory states on `params.Sgrid`.
+
+Inputs:
+- `params`: model parameters
+- `price_policy_fn`: callable returning optimal price at inventory `s`
+- `order_policy_fn`: callable returning optimal order at inventory `s`
+
+Returns:
+- `P::Matrix{Float64}` with size `(Ns, Ns)`, where `P[i, j] = Pr(s_{t+1} = Sgrid[j] | s_t = Sgrid[i])`
+
+Implementation details:
+- Demand shock is continuous lognormal (`params.dist`)
+- `s_{t+1}` is mapped to the discrete grid using midpoint bins implied by `Sgrid`
+- Stockout events induce a point mass at `s_{t+1} = (1-δ) * n(s)`
+"""
+function compute_inventory_transition_matrix(params::Parameters, price_policy_fn, order_policy_fn)
+    Sgrid = params.Sgrid
+    Ns = params.Ns
+    δ = params.δ
+    depreciation_survival = 1.0 - δ
+
+    if depreciation_survival <= 0.0
+        error("Need 1 - δ > 0 to construct the transition matrix.")
+    end
+
+    # Midpoint bins for mapping continuous next-period inventory to discrete grid states.
+    edges = Vector{Float64}(undef, Ns + 1)
+    edges[1] = -Inf
+    for j in 1:(Ns - 1)
+        edges[j + 1] = 0.5 * (Sgrid[j] + Sgrid[j + 1])
+    end
+    edges[Ns + 1] = Inf
+
+    P = zeros(Float64, Ns, Ns)
+
+    for (i, s) in enumerate(Sgrid)
+        p = max(price_policy_fn(s), eps())
+        n = max(order_policy_fn(s), 0.0)
+
+        νbar = s * p^params.ϵ
+        s_next_max = depreciation_survival * (s + n)
+        s_next_min = depreciation_survival * n
+
+        # Continuous (non-stockout) part: ν ∈ [0, νbar]
+        for j in 1:Ns
+            low_bin = edges[j]
+            high_bin = edges[j + 1]
+
+            # Intersect bin with support of continuous next-inventory values [s_next_min, s_next_max]
+            low_cont = max(low_bin, s_next_min)
+            high_cont = min(high_bin, s_next_max)
+
+            if high_cont > low_cont
+                ν_low = max(0.0, (s + n - high_cont / depreciation_survival) * p^params.ϵ)
+                ν_high = min(νbar, (s + n - low_cont / depreciation_survival) * p^params.ϵ)
+
+                if ν_high > ν_low
+                    P[i, j] += cdf(params.dist, ν_high) - cdf(params.dist, ν_low)
+                end
+            end
+
+            # Stockout atom: ν > νbar implies D = s and s_{t+1} = (1-δ) * n
+            if (low_bin < s_next_min) && (s_next_min <= high_bin)
+                P[i, j] += 1.0 - cdf(params.dist, νbar)
+            end
+        end
+
+        row_sum = sum(P[i, :])
+        if row_sum > 0
+            P[i, :] ./= row_sum
+        else
+            nearest_j = argmin(abs.(Sgrid .- s_next_min))
+            P[i, nearest_j] = 1.0
+        end
+    end
+
+    return P
+end
+
+
+# """
+#     expected_next_value_derivative_times_nu(
+#         derivative_on_grid::AbstractVector{<:Real},
+#         transition_matrix::AbstractMatrix{<:Real},
+#         params::Parameters,
+#         price_policy_fn,
+#         order_policy_fn
+#     )
+
+# For each current state `s_t = Sgrid[i]`, compute
+
+#     E[ ν_t * V'(s_{t+1}) | s_t = Sgrid[i] ]
+
+# where `V'(Sgrid[j])` is provided by `derivative_on_grid[j]` and the distribution
+# of `s_{t+1}` is discretized on `Sgrid` using `transition_matrix`.
+
+# Because ν and next-state bins are not independent, this function uses
+# `price_policy_fn` and `order_policy_fn` to recover bin-conditional moments
+# `E[ν | s_t=i, s_{t+1} in bin j]` implied by the model's inventory law of motion.
+# """
+# function expected_next_value_derivative_times_nu(
+#     derivative_on_grid::AbstractVector{<:Real},
+#     transition_matrix::AbstractMatrix{<:Real},
+#     params::Parameters,
+#     price_policy_fn,
+#     order_policy_fn
+# )
+#     Ns = params.Ns
+#     Sgrid = params.Sgrid
+#     δ = params.δ
+#     depreciation_survival = 1.0 - δ
+#     μ = params.μν
+#     σ = params.σν
+
+#     if depreciation_survival <= 0.0
+#         error("Need 1 - δ > 0 to compute expected ν-weighted derivatives.")
+#     end
+#     if length(derivative_on_grid) != Ns
+#         error("derivative_on_grid must have length params.Ns = $(Ns).")
+#     end
+#     if size(transition_matrix, 1) != Ns || size(transition_matrix, 2) != Ns
+#         error("transition_matrix must be of size (params.Ns, params.Ns) = ($(Ns), $(Ns)).")
+#     end
+
+#     derivative_vec = Float64.(derivative_on_grid)
+#     P = Float64.(transition_matrix)
+
+#     # Midpoint bins for mapping continuous next-period inventory to discrete states.
+#     edges = Vector{Float64}(undef, Ns + 1)
+#     edges[1] = -Inf
+#     for j in 1:(Ns - 1)
+#         edges[j + 1] = 0.5 * (Sgrid[j] + Sgrid[j + 1])
+#     end
+#     edges[Ns + 1] = Inf
+
+#     mean_ν = exp(μ + 0.5 * σ^2)
+
+#     # Truncated first moment: E[ν * 1{a < ν ≤ b}] for lognormal ν.
+#     function lognormal_first_moment_interval(a::Float64, b::Float64)
+#         if !(b > a)
+#             return 0.0
+#         end
+
+#         cdf_shift(x) = x <= 0.0 ? 0.0 : cdf(Normal(), (log(x) - μ - σ^2) / σ)
+#         return mean_ν * (cdf_shift(b) - cdf_shift(a))
+#     end
+
+#     expected_values = zeros(Float64, Ns)
+
+#     for (i, s) in enumerate(Sgrid)
+#         p = max(price_policy_fn(s), eps())
+#         n = max(order_policy_fn(s), 0.0)
+
+#         νbar = s * p^params.ϵ
+#         Fbar = cdf(params.dist, νbar)
+#         Eν_trunc_state = truncated_lognormal_mean(νbar, params)*Fbar
+#         s_next_max = depreciation_survival * (s + n)
+#         s_next_min = depreciation_survival * n
+
+#         for j in 1:Ns
+#             p_ij = P[i, j]
+#             if p_ij <= 0.0
+#                 continue
+#             end
+
+#             low_bin = edges[j]
+#             high_bin = edges[j + 1]
+
+#             # Recover model-implied probability and ν-moment for this (i,j) bin,
+#             # restricting to non-stockout shocks ν ≤ νbar.
+#             prob_model = 0.0
+#             moment_model = 0.0
+
+#             low_cont = max(low_bin, s_next_min)
+#             high_cont = min(high_bin, s_next_max)
+
+#             if high_cont > low_cont
+#                 ν_low = max(0.0, (s + n - high_cont / depreciation_survival) * p^params.ϵ)
+#                 ν_high = min(νbar, (s + n - low_cont / depreciation_survival) * p^params.ϵ)
+
+#                 if ν_high > ν_low
+#                     prob_model += cdf(params.dist, ν_high) - cdf(params.dist, ν_low)
+#                     moment_model += lognormal_first_moment_interval(ν_low, ν_high)
+#                 end
+#             end
+
+#             if prob_model > 0.0
+#                 expected_values[i] += derivative_vec[j] * moment_model
+#             end
+#         end
+
+#         if Eν_trunc_state > 0.0
+#             expected_values[i] /= Eν_trunc_state
+#         else
+#             expected_values[i] = 0.0
+#         end
+#     end
+
+#     return expected_values
+# end
+
+
+
+function dVds_approx(params,
+                    p_policy,
+                    order_policy)
+
+
+    stockouts = [stockout_probability(params.Sgrid[i], p_policy[i], params) for i in 1:length(params.Sgrid)]
+
+    stockout_policy_interp = LinearInterpolation(Sgrid, stockouts, extrapolation_bc=Line())
+    p_policy_interp = LinearInterpolation(Sgrid, p_policy, extrapolation_bc=Line())
+
+    dVds_v_mat = Matrix{Float64}(undef,length(params.Sgrid),length(params.quad_nodes_lognormal))
+    for I in CartesianIndices(dVds_v_mat)
+        i, j = Tuple(I)
+
+        y = params.quad_nodes_lognormal[j]*p_policy[i]^(-params.ϵ)
+        q = min(y,params.Sgrid[i])
+        s_prime = (1-params.δ)*(params.Sgrid[i] + order_policy[i] - q )
+
+
+        y = params.quad_nodes_lognormal[j]*p_policy[i]^(-params.ϵ)
+        if y<params.Sgrid[i]
+            dVds_v_mat[i,j] =params.β*(1-params.δ)*params.quad_nodes_lognormal[j]*( stockout_policy_interp(s_prime)*p_policy_interp(s_prime) + params.c)
+        else 
+            dVds_v_mat[i,j]=0.0
+        end
+    end
+
+    exp_derivative = dVds_v_mat*params.quad_weights/sqrt(pi)
+
+    vbar = params.Sgrid.*p_policy.^params.ϵ
+    prob = [cdf(params.dist,v) for v in vbar]
+    Ev = [truncated_lognormal_mean(v, params) for v in vbar]
+
+    return exp_derivative./(Ev.*prob)
+end
