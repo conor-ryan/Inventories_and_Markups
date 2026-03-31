@@ -366,6 +366,45 @@ end
 
 
 """
+    precompute_demand(p_policy, params) -> Array{Float64, 3}
+
+Return a (Q × Q_ω × Ns) array `D_table` where
+
+    D_table[q, j, i] = min(ν_q · p_policy[i,j]^{-ϵ}, Sgrid[i])
+
+with
+- q  ∈ 1:Q    — Gauss-Hermite quadrature node index (demand shock ν)
+- j  ∈ 1:Q_ω  — Tauchen ω grid index (cost shock)
+- i  ∈ 1:Ns   — beginning-of-period inventory grid index
+
+Precomputing this table avoids repeated `pow_body` calls (ν·p^{-ϵ}) inside the
+inner quadrature loop of `expected_value_choice`.
+"""
+function precompute_demand(p_policy::Matrix{Float64}, params::Parameters)
+    Q   = params.Q
+    Nω  = params.Q_ω
+    Ns  = params.Ns
+    ν_nodes = params.quad_nodes_lognormal   # length Q, lognormal draws
+    Sgrid   = params.Sgrid
+
+    D_table = Array{Float64,3}(undef, Q, Nω, Ns)
+
+    for i in 1:Ns
+        s = Sgrid[i]
+        for j in 1:Nω
+            p     = p_policy[i, j]
+            p_neg_ε = p^(-params.ϵ)          # one pow_body per (i,j), not per q
+            for q in 1:Q
+                D_table[q, j, i] = min(ν_nodes[q] * p_neg_ε, s)
+            end
+        end
+    end
+
+    return D_table
+end
+
+
+"""
     shock_specific_value(n, s_i, Sgrid, p_policy, ν, Vinterp, params)
     
 Compute the firm value for a specific demand shock.
