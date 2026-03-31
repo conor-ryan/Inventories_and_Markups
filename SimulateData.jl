@@ -210,6 +210,10 @@ println("Annual data written to  $annual_path")
 # the iterative bias-corrected IV procedure
 # ---------------------------------------------------
 
+println("\n=== Auxiliary OLS Regression on Annual Data ===")
+ψ̂_data = compute_annual_auxiliary(df_annual)
+display(coeftable(ψ̂_data.ols_result))
+
 println("\n=== Estimating γ, μω, σω2, ρω from Annual Data via Indirect Inference ===")
 ii_result = estimate_params_ii_annual(params, df_annual;
                                        n_firms   = 200,
