@@ -234,8 +234,8 @@ function solve_value_function(params; tol=1e-4, maxiter=1000, full=false)
         p_policy_current[:, j] .= solve_price_policy(params, c_tilde, ω_grid[j])
     end
 
-    # Precompute demand table to avoid repeated pow_body in the quadrature loop
-    D_table = precompute_demand(p_policy_current, params)
+    # Precompute demand and operating-cost tables to avoid pow_body in the quadrature loop
+    D_table, C_table = precompute_demand(p_policy_current, params)
 
     while diff > tol && iter < maxiter
 
@@ -246,7 +246,7 @@ function solve_value_function(params; tol=1e-4, maxiter=1000, full=false)
 
             n_upper = maximum(Sgrid)
             for i in 1:Ns
-                n_t, v = maximize_expected_value_choice(i, j, D_table, p_policy_current, ω_grid[j], Vinterp_j, params, n_upper=n_upper)
+                n_t, v = maximize_expected_value_choice(i, j, D_table, C_table, p_policy_current, ω_grid[j], Vinterp_j, params, n_upper=n_upper)
                 V_by_omega_new[i, j] = v
                 n_policy_current[i, j] = n_t
                 if n_t > 0.0
@@ -376,35 +376,45 @@ Return a (Q × Q_ω × Ns) array `D_table` where
 
     D_table[q, j, i] = min(ν_q · p_policy[i,j]^{-ϵ}, Sgrid[i])
 
+and a matching `C_table` where
+
+    C_table[q, j, i] = ω_j · D_table[q,j,i]^γ
+
 with
 - q  ∈ 1:Q    — Gauss-Hermite quadrature node index (demand shock ν)
 - j  ∈ 1:Q_ω  — Tauchen ω grid index (cost shock)
 - i  ∈ 1:Ns   — beginning-of-period inventory grid index
 
-Precomputing this table avoids repeated `pow_body` calls (ν·p^{-ϵ}) inside the
-inner quadrature loop of `expected_value_choice`.
+Precomputing both tables eliminates all `pow_body` calls (ν·p^{-ϵ} and D^γ)
+from the inner quadrature loop of `expected_value_choice`.
 """
 function precompute_demand(p_policy::Matrix{Float64}, params::Parameters)
-    Q   = params.Q
-    Nω  = params.Q_ω
-    Ns  = params.Ns
-    ν_nodes = params.quad_nodes_lognormal   # length Q, lognormal draws
+    Q       = params.Q
+    Nω      = params.Q_ω
+    Ns      = params.Ns
+    ν_nodes = params.quad_nodes_lognormal
     Sgrid   = params.Sgrid
+    ω_grid  = params.ω_grid
+    γ       = params.γ
 
     D_table = Array{Float64,3}(undef, Q, Nω, Ns)
+    C_table = Array{Float64,3}(undef, Q, Nω, Ns)
 
     for i in 1:Ns
         s = Sgrid[i]
         for j in 1:Nω
-            p     = p_policy[i, j]
-            p_neg_ε = p^(-params.ϵ)          # one pow_body per (i,j), not per q
+            p       = p_policy[i, j]
+            p_neg_ε = p^(-params.ϵ)         # one pow_body per (i,j), not per q
+            ω       = ω_grid[j]
             for q in 1:Q
-                D_table[q, j, i] = min(ν_nodes[q] * p_neg_ε, s)
+                D = min(ν_nodes[q] * p_neg_ε, s)
+                D_table[q, j, i] = D
+                C_table[q, j, i] = ω * D^γ  # one pow_body per (q,j,i)
             end
         end
     end
 
-    return D_table
+    return D_table, C_table
 end
 
 """
@@ -523,12 +533,11 @@ end
 Variant that accepts a pre-looked-up demand `D` and price `p`, avoiding repeated
 `pow_body` calls inside the quadrature loop.
 """
-@inline function shock_specific_value_precomp(n::Float64, D::Float64, p::Float64, s_i::Int, ω::Float64, Vinterp, params::Parameters)::Float64
-    s       = params.Sgrid[s_i]
-    s_tilde = s - D + n
-    opp_cost = ω * D^(params.γ)
+@inline function shock_specific_value_precomp(n::Float64, D::Float64, C::Float64, p::Float64, s_i::Int, Vinterp, params::Parameters)::Float64
+    s          = params.Sgrid[s_i]
+    s_tilde    = s - D + n
     order_cost = n > 0 ? params.fc + params.c * n : 0.0
-    return p * D - opp_cost - order_cost + params.β * Vinterp((1 - params.δ) * s_tilde)
+    return p * D - C - order_cost + params.β * Vinterp((1 - params.δ) * s_tilde)
 end
 
 """
@@ -537,13 +546,15 @@ end
 Variant that takes a pre-computed demand column `D_col = view(D_table, :, j, i)`
 (length Q) and the corresponding price `p = p_policy[s_i, j]`.
 """
-function expected_value_choice(n::Float64, s_i::Int, D_col::AbstractVector{Float64},
-                                p::Float64, ω::Float64, Vinterp,
+function expected_value_choice(n::Float64, s_i::Int,
+                                D_col::AbstractVector{Float64},
+                                C_col::AbstractVector{Float64},
+                                p::Float64, Vinterp,
                                 params::Parameters)::Float64
     w  = params.quad_weights
     EV = 0.0
     for q in 1:params.Q
-        EV += w[q] * shock_specific_value_precomp(n, D_col[q], p, s_i, ω, Vinterp, params)
+        EV += w[q] * shock_specific_value_precomp(n, D_col[q], C_col[q], p, s_i, Vinterp, params)
     end
     return EV / sqrt(pi)
 end
@@ -556,18 +567,20 @@ quadrature loop.  Only used in the initial (non-full) value-function iteration.
 """
 function maximize_expected_value_choice(s_i::Int, j::Int,
                                          D_table::Array{Float64,3},
+                                         C_table::Array{Float64,3},
                                          p_policy::Matrix{Float64},
                                          ω::Float64, Vinterp, params::Parameters;
                                          n_upper::Float64=maximum(params.Sgrid))
     D_col = view(D_table, :, j, s_i)
+    C_col = view(C_table, :, j, s_i)
     p     = p_policy[s_i, j]
     function obj(n)
-        return -expected_value_choice(n, s_i, D_col, p, ω, Vinterp, params)
+        return -expected_value_choice(n, s_i, D_col, C_col, p, Vinterp, params)
     end
     result    = Optim.optimize(obj, 0.0, n_upper, Brent(), rel_tol=1e-12, abs_tol=1e-12)
     n_opt     = result.minimizer
     value_max = -result.minimum
-    no_order  = expected_value_choice(0.0, s_i, D_col, p, ω, Vinterp, params)
+    no_order  = expected_value_choice(0.0, s_i, D_col, C_col, p, Vinterp, params)
     if value_max < no_order
         n_opt     = 0.0
         value_max = no_order
