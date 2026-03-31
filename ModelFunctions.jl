@@ -100,6 +100,41 @@ end
 
 
 """
+    UniformInterp
+
+Lightweight callable for linear interpolation (+ linear extrapolation) on a
+**uniform** grid.  Much faster than `Interpolations.LinearInterpolation` in
+tight inner loops because the grid index is computed directly (one multiply +
+one add) rather than via binary search, and the call overhead is minimal.
+
+# Fields
+- `V`    : value vector (length Ns)
+- `s_lo` : grid lower bound (`Sgrid[1]`)
+- `inv_h`: `(Ns-1) / (Sgrid[end] - Sgrid[1])`  (precomputed reciprocal step)
+"""
+struct UniformInterp
+    V    :: Vector{Float64}
+    s_lo :: Float64
+    inv_h :: Float64
+end
+
+@inline function (f::UniformInterp)(x::Float64)::Float64
+    t = (x - f.s_lo) * f.inv_h      # fractional 0-based index
+    n = length(f.V)
+    if t <= 0.0
+        @inbounds return f.V[1] + t * (f.V[2] - f.V[1])
+    elseif t >= n - 1
+        excess = t - (n - 1)
+        @inbounds return f.V[n] + excess * (f.V[n] - f.V[n-1])
+    else
+        i = floor(Int, t) + 1        # 1-based lower index
+        α = t - (i - 1)              # fractional part in [0, 1)
+        @inbounds return f.V[i] + α * (f.V[i+1] - f.V[i])
+    end
+end
+
+
+"""
     update_parameters(params::Parameters, x::Vector{Float64})
     
 Create a new Parameters object with updated depreciation rate (δ), 
@@ -237,12 +272,16 @@ function solve_value_function(params; tol=1e-4, maxiter=1000, full=false)
     # Precompute demand and operating-cost tables to avoid pow_body in the quadrature loop
     D_table, C_table = precompute_demand(p_policy_current, params)
 
+    # Precompute uniform-grid constants for fast interpolation (computed once, reused every iteration)
+    inv_h = (Ns - 1) / (Sgrid[end] - Sgrid[1])
+    EV_cont_j = Vector{Float64}(undef, Ns)   # preallocate; reused every (iter, j)
+
     while diff > tol && iter < maxiter
 
         for j in 1:Nω
             # State-conditional continuation: E[V(s', ω') | ω_j] for each next-period s'
-            EV_cont_j = V_by_omega * P_ω[j, :]
-            Vinterp_j = LinearInterpolation(Sgrid, EV_cont_j, extrapolation_bc=Line())
+            mul!(EV_cont_j, V_by_omega, P_ω[j, :])
+            Vinterp_j = UniformInterp(copy(EV_cont_j), Sgrid[1], inv_h)
 
             n_upper = maximum(Sgrid)
             for i in 1:Ns
