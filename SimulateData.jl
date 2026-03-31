@@ -1,6 +1,7 @@
 using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Interpolations,
-      Random, Statistics, DataFrames, CSV
+      Random, Statistics, DataFrames, CSV, FixedEffectModels, Printf
 include("ModelFunctions.jl")
+include("EstimationFunctions.jl")
 
 """
     simulate_panel_data(params, price_policy_interp, order_policy_interp;
@@ -202,3 +203,24 @@ CSV.write(monthly_path, df_monthly)
 CSV.write(annual_path,  df_annual)
 println("Monthly data written to $monthly_path")
 println("Annual data written to  $annual_path")
+
+
+# ---------------------------------------------------
+# Estimate γ from the annual simulated data using
+# the iterative bias-corrected IV procedure
+# ---------------------------------------------------
+
+println("\n=== Estimating γ from Annual Data ===")
+γ̂_BC, μω_est_mo, σω2_est_mo, ρω_est_mo =
+    estimate_gamma_bc_annual(params, df_annual;
+                              n_years  = 200,
+                              n_firms  = 40,
+                              max_iter = 20,
+                              tol      = 1e-2,
+                              seed     = 212311)
+
+println("\n=== True vs Estimated ===")
+println("True  γ:   $(params.γ)    Estimated γ̂_BC: $(round(γ̂_BC, digits=6))")
+println("True  μω:  $(round(exp(params.μω), digits=6))    Estimated (monthly): $(round(μω_est_mo, digits=6))")
+println("True  σω2: $(round(params.σω2,     digits=6))    Estimated (monthly): $(round(σω2_est_mo, digits=6))")
+println("True  ρω:  $(round(params.ρ_ω,     digits=6))    Estimated (monthly): $(round(ρω_est_mo,  digits=6))")
