@@ -227,9 +227,37 @@ ii_result = estimate_params_ii_annual(params, df_annual;
                                        seed      = 212311,
                                        verbose   = true)
 
-println("\n=== True vs Estimated ===")
+println("\n=== True vs Estimated (cost-shock estimator) ===")
 println("Parameter   True          Estimated (monthly)")
-@printf("γ           %10.6f    %10.6f\n", params.γ,   ii_result.γ̂)
+@printf("γ           %10.6f    %10.6f\n", params.γ,       ii_result.γ̂)
 @printf("μω          %10.6f    %10.6f\n", exp(params.μω), ii_result.μω_monthly)
-@printf("σω2         %10.6f    %10.6f\n", params.σω2,  ii_result.σω2_monthly)
-@printf("ρω          %10.6f    %10.6f\n", params.ρ_ω,  ii_result.ρω_monthly)
+@printf("σω2         %10.6f    %10.6f\n", params.σω2,     ii_result.σω2_monthly)
+@printf("ρω          %10.6f    %10.6f\n", params.ρ_ω,     ii_result.ρω_monthly)
+
+# ---------------------------------------------------
+# Full 7-parameter indirect inference estimation
+# ---------------------------------------------------
+
+println("\n=== Monthly Data Moments ===")
+mo_moments = compute_monthly_moments(df_monthly)
+@printf("avg_isr          = %10.6f\n", mo_moments.avg_isr)
+@printf("var_isr          = %10.6f\n", mo_moments.var_isr)
+@printf("avg_gross_margin = %10.6f\n", mo_moments.avg_gross_margin)
+
+println("\n=== Estimating all 7 parameters via Full Indirect Inference ===")
+ii_full = estimate_params_ii_full(params, df_monthly, df_annual;
+                                   n_firms  = 200,
+                                   n_years  = 50,
+                                   max_iter = 1000,
+                                   seed     = 212311,
+                                   verbose  = true)
+
+println("\n=== True vs Estimated (full 7-parameter estimator) ===")
+println("Parameter   True          Estimated")
+@printf("γ           %10.6f    %10.6f\n", params.γ,       ii_full.γ̂)
+@printf("μω          %10.6f    %10.6f\n", exp(params.μω), ii_full.μω)
+@printf("σω2         %10.6f    %10.6f\n", params.σω2,     ii_full.σω2)
+@printf("ρω          %10.6f    %10.6f\n", params.ρ_ω,     ii_full.ρω)
+@printf("σν          %10.6f    %10.6f\n", params.σν,      ii_full.σν)
+@printf("ϵ           %10.6f    %10.6f\n", params.ϵ,       ii_full.ϵ̂)
+@printf("δ           %10.6f    %10.6f\n", params.δ,       ii_full.δ̂)

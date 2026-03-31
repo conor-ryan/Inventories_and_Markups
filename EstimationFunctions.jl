@@ -361,7 +361,7 @@ function estimate_params_ii_annual(params_base::Parameters, df_annual::DataFrame
 
     result = Optim.optimize(obj, x0, Optim.NelderMead(),
                              Optim.Options(iterations=max_iter, show_trace=false,
-                                           x_tol=1e-4, f_tol=1e-4))
+                                           x_abstol=1e-4, f_reltol=1e-4))
 
     γ̂, μω_est, σω2_est, ρω_est = unpack(Optim.minimizer(result))
 
@@ -376,5 +376,242 @@ function estimate_params_ii_annual(params_base::Parameters, df_annual::DataFrame
     end
 
     return (γ̂=γ̂, μω_monthly=μω_est, σω2_monthly=σω2_est, ρω_monthly=ρω_est,
+            obj_value=Optim.minimum(result), result=result)
+end
+
+
+# ============================================================
+# Full 7-parameter indirect inference estimator
+# ============================================================
+
+"""
+    compute_monthly_moments(df_monthly)
+
+Compute three moments from a monthly balanced panel:
+1. `avg_isr`          — mean of BOM-inventory-to-revenue ratio
+2. `var_isr`          — variance of BOM-inventory-to-revenue ratio
+3. `avg_gross_margin` — mean of revenue / COGS  (= mean of p/c)
+
+`df_monthly` must have columns `inv_to_sales`, `revenue`, `cogs`.
+"""
+function compute_monthly_moments(df_monthly::DataFrame)
+    valid = (df_monthly.inv_to_sales .> 0) .& isfinite.(df_monthly.inv_to_sales) .&
+            (df_monthly.revenue .> 0) .& (df_monthly.cogs .> 0)
+    isr = df_monthly.inv_to_sales[valid]
+    gm  = df_monthly.revenue[valid] ./ df_monthly.cogs[valid]
+    return (avg_isr=mean(isr), var_isr=var(isr), avg_gross_margin=mean(gm))
+end
+
+
+"""
+    _simulate_all_moments(params, ppi, opi, n_firms, n_years, seed)
+
+Simulate `n_firms` firms for `n_years * 12` months and return all seven moments
+used by `estimate_params_ii_full`:
+
+Monthly moments (computed from raw simulation output):
+- `avg_isr`          — mean of BOM-inventory / revenue
+- `var_isr`          — variance of BOM-inventory / revenue
+- `avg_gross_margin` — mean of p/c
+
+Annual auxiliary statistics (from `compute_annual_auxiliary`):
+- `γ̂_OLS`, `ρ̂_ω`, `σ̂_η2`, `μ̂_ω`
+"""
+function _simulate_all_moments(params::Parameters, ppi, opi,
+                                n_firms::Int, n_years::Int,
+                                seed::Union{Int,Nothing})
+    n_months = n_years * 12
+    if !isnothing(seed)
+        Random.seed!(seed)
+    end
+
+    inv_sim, _, dem_sim, _, exp_sim, _, isr_sim =
+        simulate_firm(n_firms, n_months, ppi, opi, params)
+
+    # Monthly moments
+    # isr_sim[t] = c·s_t/(p_t·D_t)  →  BOM/revenue ISR = s_t/(p_t·D_t) = isr_sim[t]/c
+    # gross margin = p/c = s_t / (isr_sim[t]·D_t)   (requires D_t > 0)
+    valid_mo = (isr_sim .> 0) .& (dem_sim .> 0) .& isfinite.(isr_sim)
+    isr_mo   = isr_sim[valid_mo] ./ params.c
+    gm_mo    = inv_sim[valid_mo] ./ (isr_sim[valid_mo] .* dem_sim[valid_mo])
+    avg_isr_sim = mean(isr_mo)
+    var_isr_sim = var(isr_mo)
+    avg_gm_sim  = mean(gm_mo)
+
+    # Annual aggregation for auxiliary regression
+    n_ann    = n_firms * n_years
+    firm_ids = Vector{Int}(undef, n_ann)
+    year_ids = Vector{Int}(undef, n_ann)
+    tot_opex  = Vector{Float64}(undef, n_ann)
+    tot_sales = Vector{Float64}(undef, n_ann)
+
+    for firm in 1:n_firms
+        m0 = (firm - 1) * n_months
+        a0 = (firm - 1) * n_years
+        for yr in 1:n_years
+            m_first = m0 + (yr - 1) * 12 + 1
+            m_last  = m0 + yr * 12
+            a_idx   = a0 + yr
+            firm_ids[a_idx]  = firm
+            year_ids[a_idx]  = yr
+            tot_opex[a_idx]  = sum(exp_sim[m_first:m_last])
+            tot_sales[a_idx] = sum(dem_sim[m_first:m_last])
+        end
+    end
+
+    df_ann = DataFrame(firm_id=firm_ids, year_id=year_ids,
+                       total_opex=tot_opex, total_sales=tot_sales)
+    ψ̃_ann = compute_annual_auxiliary(df_ann)
+
+    return (avg_isr=avg_isr_sim, var_isr=var_isr_sim, avg_gross_margin=avg_gm_sim,
+            γ̂_OLS=ψ̃_ann.γ̂_OLS, ρ̂_ω=ψ̃_ann.ρ̂_ω, σ̂_η2=ψ̃_ann.σ̂_η2, μ̂_ω=ψ̃_ann.μ̂_ω)
+end
+
+
+"""
+    estimate_params_ii_full(params_base, df_monthly, df_annual; ...)
+
+Indirect inference estimator for all seven estimable structural parameters:
+
+| Parameter | Description                        | Identifies          |
+|-----------|------------------------------------|---------------------|
+| γ         | cost-function curvature            | annual OLS slope    |
+| μω        | level mean of cost shock ω         | annual AR(1) mean   |
+| σω2       | innovation variance of log(ω)      | annual AR(1) σ²     |
+| ρω        | AR(1) persistence of log(ω)        | annual AR(1) ρ      |
+| σν        | log-space std of demand shock ν    | monthly ISR level   |
+| ϵ         | demand elasticity                  | gross margin        |
+| δ         | inventory depreciation rate        | monthly ISR variance|
+
+**Data moments** (7 total):
+- Monthly: avg BOM-inventory/revenue ISR, variance of ISR, avg gross margin (p/c)
+- Annual: γ̂_OLS, ρ̂_ω, σ̂²_η, μ̂_ω  from the OLS auxiliary regression
+
+**Objective** — normalised SSE:
+
+    obj(θ) = Σ_k  [(m̂_k − m̃_k(θ)) / |m̂_k|]²
+
+Minimised via Nelder-Mead over the unconstrained reparameterisation
+`(γ, log μω, log σω2, arctanh ρω, log σν, ϵ, logit δ)`.
+
+The level mean of ν (μν) is held fixed at its value in `params_base`.
+
+# Returns
+Named tuple with fields `γ̂`, `μω`, `σω2`, `ρω`, `σν`, `ϵ̂`, `δ̂`,
+`obj_value`, `result`.
+"""
+function estimate_params_ii_full(params_base::Parameters,
+                                  df_monthly::DataFrame,
+                                  df_annual::DataFrame;
+                                  n_firms::Int   = 200,
+                                  n_years::Int   = 50,
+                                  γ_lb::Float64  = 0.05,  γ_ub::Float64  = 3.0,
+                                  μω_lb::Float64 = 0.01,  μω_ub::Float64 = 100.0,
+                                  σ2_lb::Float64 = 1e-6,  σ2_ub::Float64 = 5.0,
+                                  ρ_lb::Float64  = -0.999, ρ_ub::Float64 = 0.999,
+                                  σν_lb::Float64 = 1e-4,  σν_ub::Float64 = 5.0,
+                                  ϵ_lb::Float64  = 1.1,   ϵ_ub::Float64  = 20.0,
+                                  δ_lb::Float64  = 0.001, δ_ub::Float64  = 0.999,
+                                  seed::Int      = 212311,
+                                  max_iter::Int  = 1000,
+                                  verbose::Bool  = true)
+
+    # Fixed level mean of ν  (recovered from params_base log-space fields)
+    μν_level = exp(params_base.μν + 0.5 * params_base.σν2)
+
+    # --- Data moments ---
+    mo_data  = compute_monthly_moments(df_monthly)
+    ann_data = compute_annual_auxiliary(df_annual)
+    m̂ = [mo_data.avg_isr, mo_data.var_isr, mo_data.avg_gross_margin,
+          ann_data.γ̂_OLS, ann_data.ρ̂_ω, ann_data.σ̂_η2, ann_data.μ̂_ω]
+    w = [1.0 / max(abs(v), 1e-8)^2 for v in m̂]
+
+    if verbose
+        println("\n=== Full II Estimation — Data Moments ===")
+        @printf("  avg_isr          = %10.6f\n", m̂[1])
+        @printf("  var_isr          = %10.6f\n", m̂[2])
+        @printf("  avg_gross_margin = %10.6f\n", m̂[3])
+        @printf("  γ̂_OLS (annual)   = %10.6f\n", m̂[4])
+        @printf("  ρ̂_ω  (annual)    = %10.6f\n", m̂[5])
+        @printf("  σ̂²_η (annual)    = %10.6f\n", m̂[6])
+        @printf("  μ̂_ω  (annual)    = %10.6f\n", m̂[7])
+        println("\nStarting Nelder-Mead over (γ, log μω, log σ²ω, arctanh ρω, log σν, ϵ, logit δ)...")
+        println("\n iter │    γ    │    μω   │   σ²ω   │    ρω   │    σν   │    ϵ    │    δ    │   obj")
+        println("──────┼─────────┼─────────┼─────────┼─────────┼─────────┼─────────┼─────────┼──────────")
+    end
+
+    iter_count = Ref(0)
+
+    function unpack(x)
+        γ_n   = clamp(x[1],                γ_lb,  γ_ub)
+        μω_n  = clamp(exp(x[2]),           μω_lb, μω_ub)
+        σω2_n = clamp(exp(x[3]),           σ2_lb, σ2_ub)
+        ρω_n  = clamp(tanh(x[4]),          ρ_lb,  ρ_ub)
+        σν_n  = clamp(exp(x[5]),           σν_lb, σν_ub)
+        ϵ_n   = clamp(x[6],                ϵ_lb,  ϵ_ub)
+        δ_n   = clamp(1/(1+exp(-x[7])),    δ_lb,  δ_ub)
+        return γ_n, μω_n, σω2_n, ρω_n, σν_n, ϵ_n, δ_n
+    end
+
+    function obj(x::Vector{Float64})
+        iter_count[] += 1
+        γ_n, μω_n, σω2_n, ρω_n, σν_n, ϵ_n, δ_n = unpack(x)
+        try
+            # Reconstruct level variance of ν from fixed level mean and new log-space σν
+            σν2_level_n = μν_level^2 * (exp(σν_n^2) - 1.0)
+            params_iter = Parameters(c=params_base.c, fc=params_base.fc,
+                                      μω=μω_n, σω2=σω2_n, ρ_ω=ρω_n, γ=γ_n,
+                                      δ=δ_n, β=params_base.β, ϵ=ϵ_n,
+                                      μν=μν_level, σν2=σν2_level_n,
+                                      Smax=params_base.Smax, Ns=params_base.Ns)
+            _, _, _, _, ppi, opi, _ = solve_model(params_iter)
+            m̃_nt = _simulate_all_moments(params_iter, ppi, opi, n_firms, n_years, seed)
+            m̃ = [m̃_nt.avg_isr, m̃_nt.var_isr, m̃_nt.avg_gross_margin,
+                  m̃_nt.γ̂_OLS,  m̃_nt.ρ̂_ω,   m̃_nt.σ̂_η2, m̃_nt.μ̂_ω]
+            sse = sum(w[k] * (m̂[k] - m̃[k])^2 for k in 1:7)
+
+            if verbose
+                @printf("  %4d │ %7.4f │ %7.4f │ %7.5f │ %7.4f │ %7.4f │ %7.3f │ %7.4f │ %9.5f\n",
+                        iter_count[], γ_n, μω_n, σω2_n, ρω_n, σν_n, ϵ_n, δ_n, sse)
+            end
+            return sse
+        catch
+            verbose && @printf("  %4d — model failed, penalty returned\n", iter_count[])
+            return 1e10
+        end
+    end
+
+    # Initial point from params_base
+    σν_init = params_base.σν   # log-space std already stored in params
+    x0 = [params_base.γ,
+          log(clamp(exp(params_base.μω),  μω_lb, μω_ub)),
+          log(clamp(params_base.σω2,       σ2_lb, σ2_ub)),
+          atanh(clamp(params_base.ρ_ω,    ρ_lb,  ρ_ub)),
+          log(clamp(σν_init,              σν_lb, σν_ub)),
+          clamp(params_base.ϵ,            ϵ_lb,  ϵ_ub),
+          log(clamp(params_base.δ, δ_lb, δ_ub) /
+              (1.0 - clamp(params_base.δ, δ_lb, δ_ub)))]
+
+    result = Optim.optimize(obj, x0, Optim.NelderMead(),
+                             Optim.Options(iterations=max_iter, show_trace=false,
+                                           x_tol=1e-4, f_tol=1e-4))
+
+    γ̂, μω_est, σω2_est, ρω_est, σν_est, ϵ_est, δ_est = unpack(Optim.minimizer(result))
+
+    if verbose
+        println("\n=== Full II Estimation Complete ===")
+        println("  Converged : $(Optim.converged(result))")
+        @printf("  γ̂         = %10.6f\n", γ̂)
+        @printf("  μ̂ω        = %10.6f\n", μω_est)
+        @printf("  σ̂²ω       = %10.6f\n", σω2_est)
+        @printf("  ρ̂ω        = %10.6f\n", ρω_est)
+        @printf("  σ̂ν        = %10.6f\n", σν_est)
+        @printf("  ϵ̂         = %10.6f\n", ϵ_est)
+        @printf("  δ̂         = %10.6f\n", δ_est)
+        println("  Objective : $(round(Optim.minimum(result), digits=8))")
+    end
+
+    return (γ̂=γ̂, μω=μω_est, σω2=σω2_est, ρω=ρω_est,
+            σν=σν_est, ϵ̂=ϵ_est, δ̂=δ_est,
             obj_value=Optim.minimum(result), result=result)
 end
