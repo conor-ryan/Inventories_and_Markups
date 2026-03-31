@@ -1,4 +1,4 @@
-using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Plots, Interpolations, LineSearch, Random, Statistics, DataFrames, GLM, FixedEffectModels, Printf, BenchmarkTools
+using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Plots, Interpolations, LineSearch, Random, Statistics, DataFrames, GLM, FixedEffectModels, Printf, BenchmarkTools, Profile
 include("ModelFunctions.jl")
 include("EstimationFunctions.jl")
 
@@ -9,6 +9,14 @@ params = Parameters(c=1.0, fc=0.0, μω=0.2,σω2=0.05,ρ_ω=0.1, γ=0.9,δ=0.01
 # ---------------------------------------------------
 println("Benchmarking one value-function iteration...")
 display(@benchmark solve_value_function($params, maxiter=1) samples=10 evals=1)
+
+# ---------------------------------------------------
+# Profile one iteration and display a flat time profile
+# ---------------------------------------------------
+println("\nProfiling one value-function iteration...")
+Profile.clear()
+@profile solve_value_function(params, maxiter=1)
+Profile.print(format=:flat, sortedby=:count, mincount=5)
 # ---------------------------------------------------
 
 Sgrid = params.Sgrid
