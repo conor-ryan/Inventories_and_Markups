@@ -210,17 +210,17 @@ println("Annual data written to  $annual_path")
 # the iterative bias-corrected IV procedure
 # ---------------------------------------------------
 
-println("\n=== Estimating γ from Annual Data ===")
-γ̂_BC, μω_est_mo, σω2_est_mo, ρω_est_mo =
-    estimate_gamma_bc_annual(params, df_annual;
-                              n_years  = 200,
-                              n_firms  = 40,
-                              max_iter = 20,
-                              tol      = 1e-2,
-                              seed     = 212311)
+println("\n=== Estimating γ, μω, σω2, ρω from Annual Data via Indirect Inference ===")
+ii_result = estimate_params_ii_annual(params, df_annual;
+                                       n_firms   = 200,
+                                       n_years   = 50,
+                                       max_iter  = 500,
+                                       seed      = 212311,
+                                       verbose   = true)
 
 println("\n=== True vs Estimated ===")
-println("True  γ:   $(params.γ)    Estimated γ̂_BC: $(round(γ̂_BC, digits=6))")
-println("True  μω:  $(round(exp(params.μω), digits=6))    Estimated (monthly): $(round(μω_est_mo, digits=6))")
-println("True  σω2: $(round(params.σω2,     digits=6))    Estimated (monthly): $(round(σω2_est_mo, digits=6))")
-println("True  ρω:  $(round(params.ρ_ω,     digits=6))    Estimated (monthly): $(round(ρω_est_mo,  digits=6))")
+println("Parameter   True          Estimated (monthly)")
+@printf("γ           %10.6f    %10.6f\n", params.γ,   ii_result.γ̂)
+@printf("μω          %10.6f    %10.6f\n", exp(params.μω), ii_result.μω_monthly)
+@printf("σω2         %10.6f    %10.6f\n", params.σω2,  ii_result.σω2_monthly)
+@printf("ρω          %10.6f    %10.6f\n", params.ρ_ω,  ii_result.ρω_monthly)

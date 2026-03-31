@@ -122,6 +122,248 @@ function estimate_omega_ar1(log_ω_proxy::AbstractVector{<:Real}, firm_boundary:
 end
 
 
+# ============================================================
+# Indirect Inference estimation of (γ, μω, σω2, ρω) from
+# annual panel data
+# ============================================================
+
+"""
+    compute_annual_auxiliary(df_annual)
+
+Compute four auxiliary statistics from an annual balanced panel:
+
+1. `γ̂_IV`  — IV estimate of γ: log(total_opex) ~ log(total_sales),
+              instrument = Δ(inv_to_sales)
+2. `ρ̂_ω`   — AR(1) persistence of annual log-ω proxy
+3. `σ̂_η2`  — AR(1) innovation variance of annual log-ω proxy
+4. `μ̂_ω`   — unconditional level mean of ω proxy
+
+`df_annual` must have columns: `firm_id`, `year_id`, `total_opex`,
+`total_sales`, `inv_to_sales`.
+
+Returns a NamedTuple `(γ̂_IV, ρ̂_ω, σ̂_η2, μ̂_ω)`.
+"""
+function compute_annual_auxiliary(df_annual::DataFrame)
+    df = sort(df_annual, [:firm_id, :year_id])
+    n  = nrow(df)
+
+    Δisr_vec     = fill(NaN, n)
+    firm_bnd_vec = falses(n)
+    firm_bnd_vec[1] = true
+    for i in 2:n
+        if df.firm_id[i] != df.firm_id[i - 1]
+            firm_bnd_vec[i] = true
+        else
+            Δisr_vec[i] = df.inv_to_sales[i] - df.inv_to_sales[i - 1]
+        end
+    end
+
+    valid = (df.total_opex .> 0) .& (df.total_sales .> 0) .& .!isnan.(Δisr_vec)
+    df_iv = DataFrame(
+        log_opex      = log.(df.total_opex[valid]),
+        log_sales     = log.(df.total_sales[valid]),
+        Δisr          = Δisr_vec[valid],
+        firm_boundary = firm_bnd_vec[valid]
+    )
+
+    iv_result  = reg(df_iv, @formula(log_opex ~ (log_sales ~ Δisr)))
+    γ̂_IV       = coef(iv_result)[end]
+    log_ω_proxy = coef(iv_result)[1] .+ FixedEffectModels.residuals(iv_result, df_iv)
+    μ̂_ω, σ̂_η2, ρ̂_ω = estimate_omega_ar1(log_ω_proxy, df_iv.firm_boundary)
+
+    return (γ̂_IV=γ̂_IV, ρ̂_ω=ρ̂_ω, σ̂_η2=σ̂_η2, μ̂_ω=μ̂_ω)
+end
+
+
+"""
+    _simulate_and_get_annual(params, ppi, opi, n_firms, n_years, seed)
+
+Simulate `n_firms` firms for `n_years * 12` months using the supplied policy
+interpolants `ppi` and `opi`, then aggregate to an annual panel DataFrame with
+columns `firm_id`, `year_id`, `total_opex`, `total_sales`, `inv_to_sales`.
+
+`inv_to_sales` is defined as BOY inventory divided by average monthly revenue
+over the year, matching the definition in `simulate_panel_data`.
+"""
+function _simulate_and_get_annual(params::Parameters, ppi, opi,
+                                   n_firms::Int, n_years::Int,
+                                   seed::Union{Int,Nothing})
+    n_months = n_years * 12
+    if !isnothing(seed)
+        Random.seed!(seed)
+    end
+
+    inv_sim, _, dem_sim, _, exp_sim, _, isr_sim =
+        simulate_firm(n_firms, n_months, ppi, opi, params)
+
+    n_ann    = n_firms * n_years
+    firm_ids = Vector{Int}(undef, n_ann)
+    year_ids = Vector{Int}(undef, n_ann)
+    tot_opex = Vector{Float64}(undef, n_ann)
+    tot_sales = Vector{Float64}(undef, n_ann)
+    isr_ann  = Vector{Float64}(undef, n_ann)
+
+    for firm in 1:n_firms
+        m0 = (firm - 1) * n_months
+        a0 = (firm - 1) * n_years
+        for yr in 1:n_years
+            m_first = m0 + (yr - 1) * 12 + 1
+            m_last  = m0 + yr * 12
+            a_idx   = a0 + yr
+
+            # Monthly revenue: isr_sim[t] = c·s_t/(p_t·D_t), so p_t·D_t = c·s_t/isr_sim[t]
+            ann_rev = sum(isr_sim[t] > 0 ? params.c * inv_sim[t] / isr_sim[t] : 0.0
+                          for t in m_first:m_last)
+            avg_monthly_rev  = ann_rev / 12
+
+            firm_ids[a_idx]  = firm
+            year_ids[a_idx]  = yr
+            tot_opex[a_idx]  = sum(exp_sim[m_first:m_last])
+            tot_sales[a_idx] = sum(dem_sim[m_first:m_last])
+            isr_ann[a_idx]   = avg_monthly_rev > 0.0 ? inv_sim[m_first] / avg_monthly_rev : NaN
+        end
+    end
+
+    return DataFrame(
+        firm_id      = firm_ids,
+        year_id      = year_ids,
+        total_opex   = tot_opex,
+        total_sales  = tot_sales,
+        inv_to_sales = isr_ann
+    )
+end
+
+
+"""
+    estimate_params_ii_annual(params_base, df_annual; ...)
+
+Indirect inference estimator for `(γ, μω_monthly, σω2_monthly, ρω_monthly)`
+from an annual balanced panel.
+
+**Auxiliary model** — applied identically to the data and to each simulation:
+1. IV regression: `log(total_opex) ~ log(total_sales)`, instrument = `Δ(inv_to_sales)`
+   → `γ̂_IV`
+2. AR(1) fitted within-firm to the annual log-ω proxy from IV residuals
+   → `(μ̂_ω, σ̂_η2, ρ̂_ω)` at annual frequency
+
+**Objective** — normalised SSE between data and simulated auxiliary statistics:
+
+    obj(θ) = Σ_k  [(ψ̂_k − ψ̃_k(θ)) / |ψ̂_k|]²
+
+Minimised via Nelder-Mead over the unconstrained reparameterisation
+`(γ, log μω, log σω2, arctanh ρω)`.
+
+All non-estimated structural parameters are taken from `params_base`.
+
+# Returns
+`NamedTuple` with fields `γ̂`, `μω_monthly`, `σω2_monthly`, `ρω_monthly`,
+`obj_value`, `result`.
+"""
+function estimate_params_ii_annual(params_base::Parameters, df_annual::DataFrame;
+                                    n_firms::Int   = 200,
+                                    n_years::Int   = 50,
+                                    γ_lb::Float64  = 0.05,
+                                    γ_ub::Float64  = 3.0,
+                                    μω_lb::Float64 = 0.01,
+                                    μω_ub::Float64 = 100.0,
+                                    σ2_lb::Float64 = 1e-6,
+                                    σ2_ub::Float64 = 5.0,
+                                    ρ_lb::Float64  = -0.999,
+                                    ρ_ub::Float64  =  0.999,
+                                    seed::Int      = 212311,
+                                    max_iter::Int  = 500,
+                                    verbose::Bool  = true)
+
+    # --- Step 0: auxiliary statistics from the data ---
+    ψ̂ = compute_annual_auxiliary(df_annual)
+    ψ̂_vec = [ψ̂.γ̂_IV, ψ̂.ρ̂_ω, ψ̂.σ̂_η2, ψ̂.μ̂_ω]
+    # Normalisation: weight inversely proportional to |ψ̂_k|²
+    w_vec = [1.0 / max(abs(v), 1e-8)^2 for v in ψ̂_vec]
+
+    if verbose
+        println("\n=== Indirect Inference: Annual Data Auxiliary Statistics ===")
+        @printf("  γ̂_IV  = %10.6f\n",  ψ̂.γ̂_IV)
+        @printf("  ρ̂_ω   = %10.6f  (annual)\n", ψ̂.ρ̂_ω)
+        @printf("  σ̂²_η  = %10.6f  (annual)\n", ψ̂.σ̂_η2)
+        @printf("  μ̂_ω   = %10.6f  (level)\n",  ψ̂.μ̂_ω)
+        println("\nStarting Nelder-Mead over (γ, log μω, log σ²ω, arctanh ρω)...")
+        println("\n iter │      γ      │    μω_mo    │   σ²ω_mo    │   ρω_mo    │  obj")
+        println("──────┼─────────────┼─────────────┼─────────────┼────────────┼─────────────")
+    end
+
+    iter_count = Ref(0)
+
+    # Map unconstrained x → bounded structural parameters
+    function unpack(x)
+        γ_n   = clamp(x[1],        γ_lb,  γ_ub)
+        μω_n  = clamp(exp(x[2]),   μω_lb, μω_ub)
+        σω2_n = clamp(exp(x[3]),   σ2_lb, σ2_ub)
+        ρω_n  = clamp(tanh(x[4]),  ρ_lb,  ρ_ub)
+        return γ_n, μω_n, σω2_n, ρω_n
+    end
+
+    function obj(x::Vector{Float64})
+        iter_count[] += 1
+        γ_n, μω_n, σω2_n, ρω_n = unpack(x)
+        try
+            μ_ν_level  = exp(params_base.μν + 0.5 * params_base.σν2)
+            σ_ν2_level = (exp(params_base.σν2) - 1.0) * μ_ν_level^2
+            params_iter = Parameters(c=params_base.c, fc=params_base.fc,
+                                      μω=μω_n, σω2=σω2_n, ρ_ω=ρω_n, γ=γ_n,
+                                      δ=params_base.δ, β=params_base.β, ϵ=params_base.ϵ,
+                                      μν=μ_ν_level, σν2=σ_ν2_level,
+                                      Smax=params_base.Smax, Ns=params_base.Ns)
+            _, _, _, _, ppi, opi, _ = solve_model(params_iter)
+            df_sim = _simulate_and_get_annual(params_iter, ppi, opi, n_firms, n_years, seed)
+            ψ̃ = compute_annual_auxiliary(df_sim)
+            ψ̃_vec = [ψ̃.γ̂_IV, ψ̃.ρ̂_ω, ψ̃.σ̂_η2, ψ̃.μ̂_ω]
+            sse = sum(w_vec[k] * (ψ̂_vec[k] - ψ̃_vec[k])^2 for k in 1:4)
+
+            if verbose
+                @printf("  %4d │  %9.5f  │  %9.5f  │  %9.6f  │  %8.5f  │  %11.6f\n",
+                        iter_count[], γ_n, μω_n, σω2_n, ρω_n, sse)
+            end
+            return sse
+        catch
+            verbose && @printf("  %4d — model failed, penalty returned\n", iter_count[])
+            return 1e10
+        end
+    end
+
+    # Initial point from params_base (μω stored as log-mean → exponentiate for level)
+    γ_init   = params_base.γ
+    μω_init  = exp(params_base.μω)
+    σω2_init = params_base.σω2
+    ρω_init  = params_base.ρ_ω
+    x0 = [γ_init,
+          log(clamp(μω_init,  μω_lb, μω_ub)),
+          log(clamp(σω2_init, σ2_lb, σ2_ub)),
+          atanh(clamp(ρω_init, ρ_lb, ρ_ub))]
+
+    result = Optim.optimize(obj, x0, Optim.NelderMead(),
+                             Optim.Options(iterations=max_iter, show_trace=false))
+
+    γ̂, μω_est, σω2_est, ρω_est = unpack(Optim.minimizer(result))
+
+    if verbose
+        println("\n=== Indirect Inference Estimation Complete ===")
+        println("  Converged : $(Optim.converged(result))")
+        @printf("  γ̂         = %10.6f\n", γ̂)
+        @printf("  μ̂ω (mo)   = %10.6f\n", μω_est)
+        @printf("  σ̂²ω (mo)  = %10.6f\n", σω2_est)
+        @printf("  ρ̂ω (mo)   = %10.6f\n", ρω_est)
+        println("  Objective : $(round(Optim.minimum(result), digits=8))")
+    end
+
+    return (γ̂=γ̂, μω_monthly=μω_est, σω2_monthly=σω2_est, ρω_monthly=ρω_est,
+            obj_value=Optim.minimum(result), result=result)
+end
+
+
+# --- DEAD CODE (kept for reference) ---
+# The functions below used the iterative bias-correction approach for annual data.
+# Replaced by indirect inference; see estimate_params_ii_annual above.
+
 """
     annual_ar1_to_monthly(μω, σω2_innov_annual, ρω_annual)
 
