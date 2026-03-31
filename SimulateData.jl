@@ -1,5 +1,5 @@
 using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Interpolations,
-      Random, Statistics, DataFrames, CSV, FixedEffectModels, Printf
+      Random, Statistics, DataFrames, CSV, GLM, FixedEffectModels, Printf
 include("ModelFunctions.jl")
 include("EstimationFunctions.jl")
 
