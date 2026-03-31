@@ -234,7 +234,11 @@ function solve_value_function(params; tol=1e-4, maxiter=1000, full=false)
         p_policy_current[:, j] .= solve_price_policy(params, c_tilde, ω_grid[j])
     end
 
+    # Precompute demand table to avoid repeated pow_body in the quadrature loop
+    D_table = precompute_demand(p_policy_current, params)
+
     while diff > tol && iter < maxiter
+
         for j in 1:Nω
             # State-conditional continuation: E[V(s', ω') | ω_j] for each next-period s'
             EV_cont_j = V_by_omega * P_ω[j, :]
@@ -242,7 +246,7 @@ function solve_value_function(params; tol=1e-4, maxiter=1000, full=false)
 
             n_upper = maximum(Sgrid)
             for i in 1:Ns
-                n_t, v = maximize_expected_value_choice(i, view(p_policy_current, :, j), ω_grid[j], Vinterp_j, params, n_upper=n_upper)
+                n_t, v = maximize_expected_value_choice(i, j, D_table, p_policy_current, ω_grid[j], Vinterp_j, params, n_upper=n_upper)
                 V_by_omega_new[i, j] = v
                 n_policy_current[i, j] = n_t
                 if n_t > 0.0
@@ -403,7 +407,6 @@ function precompute_demand(p_policy::Matrix{Float64}, params::Parameters)
     return D_table
 end
 
-
 """
     shock_specific_value(n, s_i, Sgrid, p_policy, ν, Vinterp, params)
     
@@ -510,6 +513,65 @@ function maximize_expected_value_choice(s_i::Int, p_policy::AbstractVector{Float
         value_max = no_order_value
     end
     
+    return n_opt, value_max
+end
+
+
+"""
+    shock_specific_value(n, D, s_i, p, ω, Vinterp, params)
+
+Variant that accepts a pre-looked-up demand `D` and price `p`, avoiding repeated
+`pow_body` calls inside the quadrature loop.
+"""
+@inline function shock_specific_value_precomp(n::Float64, D::Float64, p::Float64, s_i::Int, ω::Float64, Vinterp, params::Parameters)::Float64
+    s       = params.Sgrid[s_i]
+    s_tilde = s - D + n
+    opp_cost = ω * D^(params.γ)
+    order_cost = n > 0 ? params.fc + params.c * n : 0.0
+    return p * D - opp_cost - order_cost + params.β * Vinterp((1 - params.δ) * s_tilde)
+end
+
+"""
+    expected_value_choice(n, s_i, j, D_col, p, ω, Vinterp, params)
+
+Variant that takes a pre-computed demand column `D_col = view(D_table, :, j, i)`
+(length Q) and the corresponding price `p = p_policy[s_i, j]`.
+"""
+function expected_value_choice(n::Float64, s_i::Int, D_col::AbstractVector{Float64},
+                                p::Float64, ω::Float64, Vinterp,
+                                params::Parameters)::Float64
+    w  = params.quad_weights
+    EV = 0.0
+    for q in 1:params.Q
+        EV += w[q] * shock_specific_value_precomp(n, D_col[q], p, s_i, ω, Vinterp, params)
+    end
+    return EV / sqrt(pi)
+end
+
+"""
+    maximize_expected_value_choice(s_i, j, D_table, p_policy, ω, Vinterp, params; ...)
+
+Variant that uses the pre-computed demand table to avoid `pow_body` inside the
+quadrature loop.  Only used in the initial (non-full) value-function iteration.
+"""
+function maximize_expected_value_choice(s_i::Int, j::Int,
+                                         D_table::Array{Float64,3},
+                                         p_policy::Matrix{Float64},
+                                         ω::Float64, Vinterp, params::Parameters;
+                                         n_upper::Float64=maximum(params.Sgrid))
+    D_col = view(D_table, :, j, s_i)
+    p     = p_policy[s_i, j]
+    function obj(n)
+        return -expected_value_choice(n, s_i, D_col, p, ω, Vinterp, params)
+    end
+    result    = Optim.optimize(obj, 0.0, n_upper, Brent(), rel_tol=1e-12, abs_tol=1e-12)
+    n_opt     = result.minimizer
+    value_max = -result.minimum
+    no_order  = expected_value_choice(0.0, s_i, D_col, p, ω, Vinterp, params)
+    if value_max < no_order
+        n_opt     = 0.0
+        value_max = no_order
+    end
     return n_opt, value_max
 end
 
