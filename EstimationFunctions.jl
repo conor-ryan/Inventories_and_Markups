@@ -361,7 +361,7 @@ function estimate_params_ii_annual(params_base::Parameters, df_annual::DataFrame
 
     result = Optim.optimize(obj, x0, Optim.NelderMead(),
                              Optim.Options(iterations=max_iter, show_trace=false,
-                                           x_abstol=1e-4, f_reltol=1e-4))
+                                           x_abstol=1e-4, g_abstol=1e-4))
 
     γ̂, μω_est, σω2_est, ρω_est = unpack(Optim.minimizer(result))
 
@@ -594,7 +594,7 @@ function estimate_params_ii_full(params_base::Parameters,
 
     result = Optim.optimize(obj, x0, Optim.NelderMead(),
                              Optim.Options(iterations=max_iter, show_trace=false,
-                                           x_tol=1e-4, f_tol=1e-4))
+                                           x_abstol=1e-4, g_abstol=1e-4))
 
     γ̂, μω_est, σω2_est, ρω_est, σν_est, ϵ_est, δ_est = unpack(Optim.minimizer(result))
 
@@ -614,4 +614,198 @@ function estimate_params_ii_full(params_base::Parameters,
     return (γ̂=γ̂, μω=μω_est, σω2=σω2_est, ρω=ρω_est,
             σν=σν_est, ϵ̂=ϵ_est, δ̂=δ_est,
             obj_value=Optim.minimum(result), result=result)
+end
+
+
+"""
+    compute_moments_on_grid(params_base; n_grid, γ_range, μω_range, σω2_range,
+                            ρω_range, σν_range, ϵ_range, δ_range,
+                            n_firms, n_years, seed, output_path)
+
+Evaluate all 7 estimation moments on a Cartesian grid of parameter values.
+
+For every combination of (γ, μω, σω2, ρω, σν, ϵ, δ) grid points the function
+solves the model, simulates `n_firms × n_years × 12` months of panel data, and
+records the moments used in `estimate_params_ii_full`.  Results are written to a
+CSV file.
+
+**Parallelisation:** the loop over grid points runs with `Threads.@threads`.
+Start Julia with `julia --threads=N` (or set the environment variable
+`JULIA_NUM_THREADS=N`) to exploit multiple cores.
+
+# Arguments
+- `params_base`   : `Parameters` object; `c`, `fc`, `β`, `μν`, `Smax`, `Ns`
+                    are held fixed at their values here.
+- `n_grid`        : Grid points per parameter.  Either a single `Int` (same for
+                    all 7 parameters) or a length-7 `Vector{Int}` in the order
+                    `[γ, μω, σω2, ρω, σν, ϵ, δ]`.
+- `γ_range`       : `(lb, ub)` for the γ grid.
+- `μω_range`      : `(lb, ub)` for the μω grid (**level** mean of ω; the
+                    constructor converts this to log-space internally).
+- `σω2_range`     : `(lb, ub)` for the σω2 grid (level innovation variance).
+- `ρω_range`      : `(lb, ub)` for the ρω grid.
+- `σν_range`      : `(lb, ub)` for σν (**log-space** std-dev of ν, stored as
+                    `params.σν`).
+- `ϵ_range`       : `(lb, ub)` for the demand-elasticity grid.
+- `δ_range`       : `(lb, ub)` for the depreciation-rate grid.
+- `n_firms`       : Firms simulated per grid point.
+- `n_years`       : Years simulated per firm (months = `n_years × 12`).
+- `seed`          : Random seed, held fixed across grid points so moments are
+                    comparable under the same simulation draws.
+- `output_path`   : Path to the output CSV file.
+
+# Returns
+A `DataFrame` with parameter columns `γ, μω, σω2, ρω, σν, ϵ, δ` and moment
+columns `avg_isr, var_isr, avg_gross_margin, γ̂_OLS, ρ̂_ω, σ̂_η2, μ̂_ω, failed`.
+`failed = true` indicates the model could not be solved at those parameters.
+"""
+function compute_moments_on_grid(params_base::Parameters;
+                                  n_grid                    = 5,
+                                  γ_range::Tuple            = (0.5, 1.5),
+                                  μω_range::Tuple           = (0.05, 2.0),
+                                  σω2_range::Tuple          = (0.01, 0.3),
+                                  ρω_range::Tuple           = (0.0, 0.9),
+                                  σν_range::Tuple           = (0.1, 1.5),
+                                  ϵ_range::Tuple            = (2.0, 15.0),
+                                  δ_range::Tuple            = (0.01, 0.3),
+                                  n_firms::Int              = 200,
+                                  n_years::Int              = 20,
+                                  seed::Int                 = 212311,
+                                  output_path::String       = "grid_moments.csv")
+
+    # --- Expand n_grid to a length-7 vector ---------------------------------
+    ng = (n_grid isa Int) ? fill(n_grid, 7) : collect(Int, n_grid)
+    length(ng) == 7 || error("n_grid must be an Int or a length-7 Vector{Int}")
+
+    # --- Build individual parameter grids -----------------------------------
+    γ_grid   = collect(LinRange(Float64(γ_range[1]),   Float64(γ_range[2]),   ng[1]))
+    μω_grid  = collect(LinRange(Float64(μω_range[1]),  Float64(μω_range[2]),  ng[2]))
+    σω2_grid = collect(LinRange(Float64(σω2_range[1]), Float64(σω2_range[2]), ng[3]))
+    ρω_grid  = collect(LinRange(Float64(ρω_range[1]),  Float64(ρω_range[2]),  ng[4]))
+    σν_grid  = collect(LinRange(Float64(σν_range[1]),  Float64(σν_range[2]),  ng[5]))
+    ϵ_grid   = collect(LinRange(Float64(ϵ_range[1]),   Float64(ϵ_range[2]),   ng[6]))
+    δ_grid   = collect(LinRange(Float64(δ_range[1]),   Float64(δ_range[2]),   ng[7]))
+
+    # Fixed level mean of ν (held constant across grid points)
+    μν_level = exp(params_base.μν + 0.5 * params_base.σν2)
+
+    # --- Enumerate all Cartesian combinations --------------------------------
+    combos  = collect(Iterators.product(γ_grid, μω_grid, σω2_grid,
+                                         ρω_grid, σν_grid, ϵ_grid, δ_grid))
+    n_total = length(combos)
+
+    @printf("Grid search: %d total points  (%d threads available)\n",
+            n_total, Threads.nthreads())
+    @printf("Grid sizes : γ=%d  μω=%d  σω2=%d  ρω=%d  σν=%d  ϵ=%d  δ=%d\n", ng...)
+
+    # --- Pre-allocate result arrays -----------------------------------------
+    out_γ    = Vector{Float64}(undef, n_total)
+    out_μω   = Vector{Float64}(undef, n_total)
+    out_σω2  = Vector{Float64}(undef, n_total)
+    out_ρω   = Vector{Float64}(undef, n_total)
+    out_σν   = Vector{Float64}(undef, n_total)
+    out_ϵ    = Vector{Float64}(undef, n_total)
+    out_δ    = Vector{Float64}(undef, n_total)
+
+    out_avg_isr  = fill(NaN, n_total)
+    out_var_isr  = fill(NaN, n_total)
+    out_avg_gm   = fill(NaN, n_total)
+    out_γ_ols    = fill(NaN, n_total)
+    out_ρω_ar1   = fill(NaN, n_total)
+    out_σ_η2     = fill(NaN, n_total)
+    out_μω_ar1   = fill(NaN, n_total)
+    out_failed   = fill(true, n_total)
+
+    # --- Progress tracking --------------------------------------------------
+    counter    = Threads.Atomic{Int}(0)
+    print_lock = ReentrantLock()
+    report_step = max(1, n_total ÷ 40)   # print at ~2.5 % increments
+    t_start     = time()
+
+    # --- Main parallel loop -------------------------------------------------
+    Threads.@threads for idx in 1:n_total
+        γ_i, μω_i, σω2_i, ρω_i, σν_i, ϵ_i, δ_i = combos[idx]
+
+        out_γ[idx]   = γ_i
+        out_μω[idx]  = μω_i
+        out_σω2[idx] = σω2_i
+        out_ρω[idx]  = ρω_i
+        out_σν[idx]  = σν_i
+        out_ϵ[idx]   = ϵ_i
+        out_δ[idx]   = δ_i
+
+        try
+            σν2_level_i = μν_level^2 * (exp(σν_i^2) - 1.0)
+            params_i = Parameters(
+                c    = params_base.c,
+                fc   = params_base.fc,
+                μω   = μω_i,          # constructor expects level mean
+                σω2  = σω2_i,
+                ρ_ω  = ρω_i,
+                γ    = γ_i,
+                δ    = δ_i,
+                β    = params_base.β,
+                ϵ    = ϵ_i,
+                μν   = μν_level,
+                σν2  = σν2_level_i,
+                Smax = params_base.Smax,
+                Ns   = params_base.Ns)
+
+            _, _, _, _, ppi, opi, _ = solve_model(params_i)
+            m̃ = _simulate_all_moments(params_i, ppi, opi, n_firms, n_years, seed)
+
+            out_avg_isr[idx]  = m̃.avg_isr
+            out_var_isr[idx]  = m̃.var_isr
+            out_avg_gm[idx]   = m̃.avg_gross_margin
+            out_γ_ols[idx]    = m̃.γ̂_OLS
+            out_ρω_ar1[idx]   = m̃.ρ̂_ω
+            out_σ_η2[idx]     = m̃.σ̂_η2
+            out_μω_ar1[idx]   = m̃.μ̂_ω
+            out_failed[idx]   = false
+        catch
+            # Leave NaN outputs and failed = true
+        end
+
+        # --- Progress bar ---------------------------------------------------
+        done = Threads.atomic_add!(counter, 1) + 1
+        if done % report_step == 0 || done == n_total
+            lock(print_lock) do
+                elapsed = time() - t_start
+                pct     = done / n_total
+                eta     = pct < 1.0 ? elapsed / pct * (1.0 - pct) : 0.0
+                bar_len = 40
+                filled  = round(Int, bar_len * pct)
+                bar     = "=" ^ max(0, filled - 1) * ">" * " " ^ (bar_len - filled)
+                @printf("\r  [%s] %3.0f%%  %d/%d  (%.0fs elapsed, %.0fs ETA)   ",
+                        bar, 100.0 * pct, done, n_total, elapsed, eta)
+                flush(stdout)
+                done == n_total && println()
+            end
+        end
+    end
+
+    # --- Assemble and save --------------------------------------------------
+    df_out = DataFrame(
+        γ                = out_γ,
+        μω               = out_μω,
+        σω2              = out_σω2,
+        ρω               = out_ρω,
+        σν               = out_σν,
+        ϵ                = out_ϵ,
+        δ                = out_δ,
+        avg_isr          = out_avg_isr,
+        var_isr          = out_var_isr,
+        avg_gross_margin = out_avg_gm,
+        γ_OLS            = out_γ_ols,
+        ρ_ω              = out_ρω_ar1,
+        σ_η2             = out_σ_η2,
+        μ_ω              = out_μω_ar1,
+        failed           = out_failed)
+
+    CSV.write(output_path, df_out)
+    n_ok = sum(.!out_failed)
+    @printf("\nGrid search complete.  %d / %d points succeeded.  Results → %s\n",
+            n_ok, n_total, output_path)
+
+    return df_out
 end

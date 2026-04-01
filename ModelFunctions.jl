@@ -852,7 +852,7 @@ end
 Solve the complete model: price policy, value function, and order policy.
 Returns (p_policy, order_policy, V, price_policy_interp, order_policy_interp, Vinterp)
 """
-function solve_model(params; full=false, verbose=false)
+function solve_model(params; full=false, verbose=false,fast_interp=true)
     Sgrid  = params.Sgrid
     ω_grid = params.ω_grid
     Nω     = params.Q_ω
@@ -860,7 +860,7 @@ function solve_model(params; full=false, verbose=false)
     if verbose
         println("Solving value function...")
     end
-    V, order_policy, p_policy, V_by_omega = solve_value_function(params, full=full)
+    V, order_policy, p_policy, V_by_omega = solve_value_function(params, full=full,fast_interp=fast_interp)
 
     # Build s-interpolation at each omega grid point; use nearest-grid-point lookup in omega.
     price_policy_interp_nodes = [LinearInterpolation(Sgrid, p_policy[:, j], extrapolation_bc=Line()) for j in 1:Nω]

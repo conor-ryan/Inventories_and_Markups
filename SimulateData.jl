@@ -205,34 +205,34 @@ println("Monthly data written to $monthly_path")
 println("Annual data written to  $annual_path")
 
 
-# ---------------------------------------------------
-# Estimate γ from the annual simulated data using
-# the iterative bias-corrected IV procedure
-# ---------------------------------------------------
+# # ---------------------------------------------------
+# # Estimate γ from the annual simulated data using
+# # the iterative bias-corrected IV procedure
+# # ---------------------------------------------------
 
-println("\n=== Auxiliary OLS Regression on Annual Data ===")
-ψ̂_data = compute_annual_auxiliary(df_annual)
-display(coeftable(ψ̂_data.ols_result))
-println("\n=== AR(1) moments of log-ω proxy (annual) ===")
-println("Parameter    Estimate       Std. Error")
-@printf("ρω           %10.6f    %10.6f\n", ψ̂_data.ρ̂_ω,   ψ̂_data.se_ρω)
-@printf("σω2          %10.6f    %10.6f\n", ψ̂_data.σ̂_η2,  ψ̂_data.se_σω2)
-@printf("μω (level)   %10.6f    %10.6f\n", ψ̂_data.μ̂_ω,   ψ̂_data.se_μω)
+# println("\n=== Auxiliary OLS Regression on Annual Data ===")
+# ψ̂_data = compute_annual_auxiliary(df_annual)
+# display(coeftable(ψ̂_data.ols_result))
+# println("\n=== AR(1) moments of log-ω proxy (annual) ===")
+# println("Parameter    Estimate       Std. Error")
+# @printf("ρω           %10.6f    %10.6f\n", ψ̂_data.ρ̂_ω,   ψ̂_data.se_ρω)
+# @printf("σω2          %10.6f    %10.6f\n", ψ̂_data.σ̂_η2,  ψ̂_data.se_σω2)
+# @printf("μω (level)   %10.6f    %10.6f\n", ψ̂_data.μ̂_ω,   ψ̂_data.se_μω)
 
-println("\n=== Estimating γ, μω, σω2, ρω from Annual Data via Indirect Inference ===")
-ii_result = estimate_params_ii_annual(params, df_annual;
-                                       n_firms   = 200,
-                                       n_years   = 50,
-                                       max_iter  = 500,
-                                       seed      = 212311,
-                                       verbose   = true)
+# println("\n=== Estimating γ, μω, σω2, ρω from Annual Data via Indirect Inference ===")
+# ii_result = estimate_params_ii_annual(params, df_annual;
+#                                        n_firms   = 200,
+#                                        n_years   = 50,
+#                                        max_iter  = 500,
+#                                        seed      = 212311,
+#                                        verbose   = true)
 
-println("\n=== True vs Estimated (cost-shock estimator) ===")
-println("Parameter   True          Estimated (monthly)")
-@printf("γ           %10.6f    %10.6f\n", params.γ,       ii_result.γ̂)
-@printf("μω          %10.6f    %10.6f\n", exp(params.μω), ii_result.μω_monthly)
-@printf("σω2         %10.6f    %10.6f\n", params.σω2,     ii_result.σω2_monthly)
-@printf("ρω          %10.6f    %10.6f\n", params.ρ_ω,     ii_result.ρω_monthly)
+# println("\n=== True vs Estimated (cost-shock estimator) ===")
+# println("Parameter   True          Estimated (monthly)")
+# @printf("γ           %10.6f    %10.6f\n", params.γ,       ii_result.γ̂)
+# @printf("μω          %10.6f    %10.6f\n", exp(params.μω), ii_result.μω_monthly)
+# @printf("σω2         %10.6f    %10.6f\n", params.σω2,     ii_result.σω2_monthly)
+# @printf("ρω          %10.6f    %10.6f\n", params.ρ_ω,     ii_result.ρω_monthly)
 
 # ---------------------------------------------------
 # Full 7-parameter indirect inference estimation
@@ -245,10 +245,13 @@ mo_moments = compute_monthly_moments(df_monthly)
 @printf("avg_gross_margin = %10.6f\n", mo_moments.avg_gross_margin)
 
 println("\n=== Estimating all 7 parameters via Full Indirect Inference ===")
-ii_full = estimate_params_ii_full(params, df_monthly, df_annual;
-                                   n_firms  = 200,
-                                   n_years  = 50,
-                                   max_iter = 1000,
+rng_init = Random.MersenneTwister(999)
+params_init = Parameters(c=1.0, fc=0.0, μω=0.2,σω2=0.01,ρ_ω=0.2, γ=0.8,δ=0.2, β=0.95, ϵ=8.0, μν=100, σν2=exp(8), Smax=100, Ns=200,scale=1.0,size=3.0)
+
+ii_full = estimate_params_ii_full(params_init, df_monthly, df_annual;
+                                   n_firms  = 100,
+                                   n_years  = 25,
+                                   max_iter = 500,
                                    seed     = 212311,
                                    verbose  = true)
 
