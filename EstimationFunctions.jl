@@ -10,7 +10,7 @@ instrument) followed by iterative model-based bias correction.
 - `n_periods` : number of simulated periods per firm
 
 # Returns
-`(γ̂_BC, μω, σω2, ρω)` — bias-corrected γ and estimated ω process parameters
+`(γ̂_BC, μη, ση2, ρω)` — bias-corrected γ and estimated ω process parameters
 """
 function estimate_gamma_bc(params::Parameters, df::DataFrame;
                             n_periods::Int = 25000,
@@ -24,25 +24,26 @@ function estimate_gamma_bc(params::Parameters, df::DataFrame;
     γ̂_step1 = coef(iv)[end]
 
     log_ω_proxy = coef(iv)[1] .+ FixedEffectModels.residuals(iv, df)
-    μω_current, σω2_current, ρω_current, _, _, _ = estimate_omega_ar1(log_ω_proxy, df.firm_boundary)
+    μη_current, ση2_current, ρω_current, _, _, _ = estimate_omega_ar1(log_ω_proxy, df.firm_boundary)
 
     println("\n=== Iterative Bias-Corrected Estimation ===")
     println("Step 1 — Initial γ̂ (z-IV):  $(round(γ̂_step1, digits=6))")
-    println("\n Iter │     γ̂        │    bias     │   γ̂_BC      │   μ̂_ω      │   σ̂η²      │   ρ̂_ω")
+    println("\n Iter │     γ̂        │    bias     │   γ̂_BC      │   μ̂_η      │   σ̂η²      │   ρ̂_ω")
     println("──────┼──────────────┼─────────────┼─────────────┼─────────────┼─────────────┼───────────")
 
     γ̂_current = γ̂_step1
     γ̂_BC      = γ̂_current
 
     for iter in 1:max_iter
-        # Re-solve and re-simulate at current (γ, μω, σω2, ρω)
-        μ_ν_level  = exp(params.μν + 0.5 * params.σν2)
-        σ_ν2_level = (exp(params.σν2) - 1.0) * μ_ν_level^2
-        params_iter = Parameters(c=params.c, fc=params.fc, μω=μω_current, σω2=σω2_current,
+        # Re-solve and re-simulate at current (γ, μη, ση2, ρω)
+        μ_ν_level  = params.μν
+        σ_ν2_level = params.σν2
+        params_iter = Parameters(c=params.c, fc=params.fc, μη=μη_current, ση2=ση2_current,
                                   ρ_ω=ρω_current, γ=γ̂_current,
                                   δ=params.δ, β=params.β, ϵ=params.ϵ,
                                   μν=μ_ν_level, σν2=σ_ν2_level,
-                                  Smax=params.Smax, Ns=params.Ns)
+                                  Smax=params.Smax, Ns=params.Ns,
+                                  size=params.size)
         _, _, _, _, ppi_iter, opi_iter, _ = solve_model(params_iter)
         Random.seed!(seed)
         _, _, dem_i, _, exp_i, ω_i, isr_i =
@@ -61,19 +62,19 @@ function estimate_gamma_bc(params::Parameters, df::DataFrame;
 
         # Re-estimate ω from original data using current γ̂
         log_ω_hat = df.log_expense .- γ̂_current .* df.log_demand
-        μ̂_ω_new, σ̂η2_new, ρ̂_ω_new, _, _, _ = estimate_omega_ar1(log_ω_hat, df.firm_boundary)
+        μ̂η_new, σ̂η2_new, ρ̂_ω_new, _, _, _ = estimate_omega_ar1(log_ω_hat, df.firm_boundary)
 
         # Bias-corrected γ
         γ̂_BC_new = γ̂_step1 - bias_i
 
         @printf("  %3d  │  %10.6f  │  %10.6f │  %10.6f │  %10.6f │  %10.6f │  %10.6f\n",
-                iter, γ̂_current, bias_i, γ̂_BC_new, μ̂_ω_new, σ̂η2_new, ρ̂_ω_new)
+                iter, γ̂_current, bias_i, γ̂_BC_new, μ̂η_new, σ̂η2_new, ρ̂_ω_new)
 
         converged   = abs(γ̂_BC_new - γ̂_BC) < tol
         γ̂_BC        = γ̂_BC_new
         γ̂_current   = γ̂_BC_new
-        μω_current  = μ̂_ω_new
-        σω2_current = σ̂η2_new
+        μη_current  = μ̂η_new
+        ση2_current = σ̂η2_new
         ρω_current  = ρ̂_ω_new
 
         if converged
@@ -83,23 +84,23 @@ function estimate_gamma_bc(params::Parameters, df::DataFrame;
     end
 
     println("\nFinal bias-corrected γ̂^BC: $(round(γ̂_BC, digits=6))")
-    println("Final ω estimates  —  μω: $(round(μω_current, digits=6))  σω2: $(round(σω2_current, digits=6))  ρω: $(round(ρω_current, digits=6))")
+    println("Final ω estimates  —  μη: $(round(μη_current, digits=6))  ση2: $(round(ση2_current, digits=6))  ρω: $(round(ρω_current, digits=6))")
 
-    return γ̂_BC, μω_current, σω2_current, ρω_current
+    return γ̂_BC, μη_current, ση2_current, ρω_current
 end
 
 
 """
     estimate_omega_ar1(log_ω_proxy, firm_boundary)
 
-Fit an AR(1) to a panel of log(ω) proxies and return the level mean, innovation
+Fit an AR(1) to a panel of log(ω) proxies and return the log-mean, innovation
 variance, and persistence.  `log_ω_proxy` is a vector with observations stacked
 across firms.  `firm_boundary` is a `Bool` vector of the same length whose `true`
 entries mark the first observation of each firm (where no AR(1) lag exists).
 
-Returns `(μω, σω2, ρω)` where
-- `μω`  = exp(unconditional mean of log ω)
-- `σω2` = variance of the AR(1) innovation
+Returns `(μη, ση2, ρω, se_μη, se_ση2, se_ρω)` where
+- `μη`  = mean of the AR(1) innovation (intercept of log(ω) AR(1))  i.e.  a
+- `ση2` = variance of the AR(1) innovation
 - `ρω`  = AR(1) slope coefficient
 """
 function estimate_omega_ar1(log_ω_proxy::AbstractVector{<:Real}, firm_boundary::AbstractVector{Bool})
@@ -125,21 +126,16 @@ function estimate_omega_ar1(log_ω_proxy::AbstractVector{<:Real}, firm_boundary:
     se_ρω = sqrt(σ²_u / Sxx)
     se_a  = sqrt(σ²_u * (1/T + x̄^2 / Sxx))
 
-    μω    = exp(a / (1 - ρω))   # unconditional mean level
-    σω2   = σ²_u                # innovation variance (= σ²_u)
+    μη    = a                   # AR(1) intercept (mean of innovation η)
+    ση2   = σ²_u                # innovation variance (= σ²_u)
 
-    # Delta-method SE for μω = exp(a/(1-ρω))
-    # ∂μω/∂a  = μω / (1-ρω)
-    # ∂μω/∂ρω = μω * a / (1-ρω)²
-    dμ_da  = μω / (1 - ρω)
-    dμ_dρ  = μω * a / (1 - ρω)^2
-    # Approx (ignoring covariance of a and ρω — conservative)
-    se_μω  = sqrt((dμ_da * se_a)^2 + (dμ_dρ * se_ρω)^2)
+    # SE for μη = a: directly the OLS SE for the intercept
+    se_μη  = se_a
 
-    # SE for σω2 = σ²_u: var of sample variance ≈ 2σ⁴/(T-2)
-    se_σω2 = sqrt(2 * σω2^2 / max(T - 2, 1))
+    # SE for ση2 = σ²_u: var of sample variance ≈ 2σ⁴/(T-2)
+    se_ση2 = sqrt(2 * ση2^2 / max(T - 2, 1))
 
-    return μω, σω2, ρω, se_μω, se_σω2, se_ρω
+    return μη, ση2, ρω, se_μη, se_ση2, se_ρω
 end
 
 
@@ -156,7 +152,7 @@ Compute four auxiliary statistics from an annual balanced panel:
 1. `γ̂_OLS` — OLS estimate of γ: log(total_opex) ~ log(total_sales)
 2. `ρ̂_ω`   — AR(1) persistence of annual log-ω proxy
 3. `σ̂_η2`  — AR(1) innovation variance of annual log-ω proxy
-4. `μ̂_ω`   — unconditional level mean of ω proxy
+4. `μ̂_ω`   — unconditional log-mean of ω proxy
 
 `df_annual` must have columns: `firm_id`, `year_id`, `total_opex`,
 `total_sales`, `inv_to_sales`.
@@ -185,11 +181,11 @@ function compute_annual_auxiliary(df_annual::DataFrame)
     ols_result  = lm(@formula(log_opex ~ log_sales), df_ols)
     γ̂_OLS       = coef(ols_result)[end]
     log_ω_proxy = coef(ols_result)[1] .+ residuals(ols_result)
-    μ̂_ω, σ̂_η2, ρ̂_ω, se_μω, se_σω2, se_ρω =
+    μ̂_η, σ̂_η2, ρ̂_ω, se_μη, se_ση2, se_ρω =
         estimate_omega_ar1(log_ω_proxy, df_ols.firm_boundary)
 
-    return (γ̂_OLS=γ̂_OLS, ρ̂_ω=ρ̂_ω, σ̂_η2=σ̂_η2, μ̂_ω=μ̂_ω,
-            se_ρω=se_ρω, se_σω2=se_σω2, se_μω=se_μω,
+    return (γ̂_OLS=γ̂_OLS, ρ̂_ω=ρ̂_ω, σ̂_η2=σ̂_η2, μ̂_η=μ̂_η,
+            se_ρω=se_ρω, se_ση2=se_ση2, se_μη=se_μη,
             ols_result=ols_result)
 end
 
@@ -283,8 +279,8 @@ function estimate_params_ii_annual(params_base::Parameters, df_annual::DataFrame
                                     n_years::Int   = 50,
                                     γ_lb::Float64  = 0.05,
                                     γ_ub::Float64  = 3.0,
-                                    μω_lb::Float64 = 0.01,
-                                    μω_ub::Float64 = 100.0,
+                                    μη_lb::Float64 = -5.0,
+                                    μη_ub::Float64 =  5.0,
                                     σ2_lb::Float64 = 1e-6,
                                     σ2_ub::Float64 = 5.0,
                                     ρ_lb::Float64  = -0.999,
@@ -295,7 +291,7 @@ function estimate_params_ii_annual(params_base::Parameters, df_annual::DataFrame
 
     # --- Step 0: auxiliary statistics from the data ---
     ψ̂ = compute_annual_auxiliary(df_annual)
-    ψ̂_vec = [ψ̂.γ̂_OLS, ψ̂.ρ̂_ω, ψ̂.σ̂_η2, ψ̂.μ̂_ω]   # se_* not used in objective
+    ψ̂_vec = [ψ̂.γ̂_OLS, ψ̂.ρ̂_ω, ψ̂.σ̂_η2, ψ̂.μ̂_η]   # se_* not used in objective
     # Normalisation: weight inversely proportional to |ψ̂_k|²
     w_vec = [1.0 / max(abs(v), 1e-8)^2 for v in ψ̂_vec]
 
@@ -304,9 +300,9 @@ function estimate_params_ii_annual(params_base::Parameters, df_annual::DataFrame
         @printf("  γ̂_OLS = %10.6f\n",  ψ̂.γ̂_OLS)
         @printf("  ρ̂_ω   = %10.6f  (annual)\n", ψ̂.ρ̂_ω)
         @printf("  σ̂²_η  = %10.6f  (annual)\n", ψ̂.σ̂_η2)
-        @printf("  μ̂_ω   = %10.6f  (level)\n",  ψ̂.μ̂_ω)
-        println("\nStarting Nelder-Mead over (γ, log μω, log σ²ω, arctanh ρω)...")
-        println("\n iter │      γ      │    μω_mo    │   σ²ω_mo    │   ρω_mo    │  obj")
+        @printf("  μ̂_η   = %10.6f  (AR(1) intercept)\n",  ψ̂.μ̂_η)
+        println("\nStarting Nelder-Mead over (γ, μη, log σ²η, arctanh ρω)...")
+        println("\n iter │      γ      │    μη_mo    │   σ²η_mo    │   ρω_mo    │  obj")
         println("──────┼─────────────┼─────────────┼─────────────┼────────────┼─────────────")
     end
 
@@ -315,32 +311,33 @@ function estimate_params_ii_annual(params_base::Parameters, df_annual::DataFrame
     # Map unconstrained x → bounded structural parameters
     function unpack(x)
         γ_n   = clamp(x[1],        γ_lb,  γ_ub)
-        μω_n  = clamp(exp(x[2]),   μω_lb, μω_ub)
-        σω2_n = clamp(exp(x[3]),   σ2_lb, σ2_ub)
+        μη_n  = clamp(x[2],        μη_lb, μη_ub)
+        ση2_n = clamp(exp(x[3]),   σ2_lb, σ2_ub)
         ρω_n  = clamp(tanh(x[4]),  ρ_lb,  ρ_ub)
-        return γ_n, μω_n, σω2_n, ρω_n
+        return γ_n, μη_n, ση2_n, ρω_n
     end
 
     function obj(x::Vector{Float64})
         iter_count[] += 1
-        γ_n, μω_n, σω2_n, ρω_n = unpack(x)
+        γ_n, μη_n, ση2_n, ρω_n = unpack(x)
         try
-            μ_ν_level  = exp(params_base.μν + 0.5 * params_base.σν2)
-            σ_ν2_level = (exp(params_base.σν2) - 1.0) * μ_ν_level^2
+            μ_ν_level  = params_base.μν
+            σ_ν2_level = params_base.σν2
             params_iter = Parameters(c=params_base.c, fc=params_base.fc,
-                                      μω=μω_n, σω2=σω2_n, ρ_ω=ρω_n, γ=γ_n,
+                                      μη=μη_n, ση2=ση2_n, ρ_ω=ρω_n, γ=γ_n,
                                       δ=params_base.δ, β=params_base.β, ϵ=params_base.ϵ,
                                       μν=μ_ν_level, σν2=σ_ν2_level,
-                                      Smax=params_base.Smax, Ns=params_base.Ns)
+                                      Smax=params_base.Smax, Ns=params_base.Ns,
+                                      size=params_base.size)
             _, _, _, _, ppi, opi, _ = solve_model(params_iter)
             df_sim = _simulate_and_get_annual(params_iter, ppi, opi, n_firms, n_years, seed)
             ψ̃ = compute_annual_auxiliary(df_sim)
-            ψ̃_vec = [ψ̃.γ̂_OLS, ψ̃.ρ̂_ω, ψ̃.σ̂_η2, ψ̃.μ̂_ω]
+            ψ̃_vec = [ψ̃.γ̂_OLS, ψ̃.ρ̂_ω, ψ̃.σ̂_η2, ψ̃.μ̂_η]
             sse = sum(w_vec[k] * (ψ̂_vec[k] - ψ̃_vec[k])^2 for k in 1:4)
 
             if verbose
                 @printf("  %4d │  %9.5f  │  %9.5f  │  %9.6f  │  %8.5f  │  %11.6f\n",
-                        iter_count[], γ_n, μω_n, σω2_n, ρω_n, sse)
+                        iter_count[], γ_n, μη_n, ση2_n, ρω_n, sse)
             end
             return sse
         catch
@@ -349,33 +346,33 @@ function estimate_params_ii_annual(params_base::Parameters, df_annual::DataFrame
         end
     end
 
-    # Initial point from params_base (μω stored as log-mean → exponentiate for level)
+    # Initial point from params_base
     γ_init   = params_base.γ
-    μω_init  = exp(params_base.μω)
-    σω2_init = params_base.σω2
+    μη_init  = params_base.μη
+    ση2_init = params_base.ση2
     ρω_init  = params_base.ρ_ω
     x0 = [γ_init,
-          log(clamp(μω_init,  μω_lb, μω_ub)),
-          log(clamp(σω2_init, σ2_lb, σ2_ub)),
+          clamp(μη_init,  μη_lb, μη_ub),
+          log(clamp(ση2_init, σ2_lb, σ2_ub)),
           atanh(clamp(ρω_init, ρ_lb, ρ_ub))]
 
     result = Optim.optimize(obj, x0, Optim.NelderMead(),
                              Optim.Options(iterations=max_iter, show_trace=false,
                                            x_abstol=1e-4, g_abstol=1e-4))
 
-    γ̂, μω_est, σω2_est, ρω_est = unpack(Optim.minimizer(result))
+    γ̂, μη_est, ση2_est, ρω_est = unpack(Optim.minimizer(result))
 
     if verbose
         println("\n=== Indirect Inference Estimation Complete ===")
         println("  Converged : $(Optim.converged(result))")
         @printf("  γ̂         = %10.6f\n", γ̂)
-        @printf("  μ̂ω (mo)   = %10.6f\n", μω_est)
-        @printf("  σ̂²ω (mo)  = %10.6f\n", σω2_est)
+        @printf("  μ̂η (mo)   = %10.6f\n", μη_est)
+        @printf("  σ̂²η (mo)  = %10.6f\n", ση2_est)
         @printf("  ρ̂ω (mo)   = %10.6f\n", ρω_est)
         println("  Objective : $(round(Optim.minimum(result), digits=8))")
     end
 
-    return (γ̂=γ̂, μω_monthly=μω_est, σω2_monthly=σω2_est, ρω_monthly=ρω_est,
+    return (γ̂=γ̂, μη_monthly=μη_est, ση2_monthly=ση2_est, ρω_monthly=ρω_est,
             obj_value=Optim.minimum(result), result=result)
 end
 
@@ -464,7 +461,7 @@ function _simulate_all_moments(params::Parameters, ppi, opi,
     ψ̃_ann = compute_annual_auxiliary(df_ann)
 
     return (avg_isr=avg_isr_sim, var_isr=var_isr_sim, avg_gross_margin=avg_gm_sim,
-            γ̂_OLS=ψ̃_ann.γ̂_OLS, ρ̂_ω=ψ̃_ann.ρ̂_ω, σ̂_η2=ψ̃_ann.σ̂_η2, μ̂_ω=ψ̃_ann.μ̂_ω)
+            γ̂_OLS=ψ̃_ann.γ̂_OLS, ρ̂_ω=ψ̃_ann.ρ̂_ω, σ̂_η2=ψ̃_ann.σ̂_η2, μ̂_η=ψ̃_ann.μ̂_η)
 end
 
 
@@ -497,7 +494,7 @@ Minimised via Nelder-Mead over the unconstrained reparameterisation
 The level mean of ν (μν) is held fixed at its value in `params_base`.
 
 # Returns
-Named tuple with fields `γ̂`, `μω`, `σω2`, `ρω`, `σν`, `ϵ̂`, `δ̂`,
+Named tuple with fields `γ̂`, `μη`, `ση2`, `ρω`, `σν`, `ϵ̂`, `δ̂`,
 `obj_value`, `result`.
 """
 function estimate_params_ii_full(params_base::Parameters,
@@ -506,24 +503,22 @@ function estimate_params_ii_full(params_base::Parameters,
                                   n_firms::Int   = 200,
                                   n_years::Int   = 50,
                                   γ_lb::Float64  = 0.05,  γ_ub::Float64  = 3.0,
-                                  μω_lb::Float64 = 0.01,  μω_ub::Float64 = 100.0,
+                                  μη_lb::Float64 = -5.0,  μη_ub::Float64 =  5.0,
                                   σ2_lb::Float64 = 1e-6,  σ2_ub::Float64 = 5.0,
                                   ρ_lb::Float64  = -0.999, ρ_ub::Float64 = 0.999,
-                                  σν_lb::Float64 = 1e-4,  σν_ub::Float64 = 5.0,
+                                  σν2_lb::Float64 = 1e-6,  σν2_ub::Float64 = 5.0,
                                   ϵ_lb::Float64  = 1.1,   ϵ_ub::Float64  = 20.0,
                                   δ_lb::Float64  = 0.001, δ_ub::Float64  = 0.999,
                                   seed::Int      = 212311,
                                   max_iter::Int  = 1000,
                                   verbose::Bool  = true)
 
-    # Fixed level mean of ν  (recovered from params_base log-space fields)
-    μν_level = exp(params_base.μν + 0.5 * params_base.σν2)
 
     # --- Data moments ---
     mo_data  = compute_monthly_moments(df_monthly)
     ann_data = compute_annual_auxiliary(df_annual)
     m̂ = [mo_data.avg_isr, mo_data.var_isr, mo_data.avg_gross_margin,
-          ann_data.γ̂_OLS, ann_data.ρ̂_ω, ann_data.σ̂_η2, ann_data.μ̂_ω]
+          ann_data.γ̂_OLS, ann_data.ρ̂_ω, ann_data.σ̂_η2, ann_data.μ̂_η]
     w = [1.0 / max(abs(v), 1e-8)^2 for v in m̂]
 
     if verbose
@@ -534,9 +529,9 @@ function estimate_params_ii_full(params_base::Parameters,
         @printf("  γ̂_OLS (annual)   = %10.6f\n", m̂[4])
         @printf("  ρ̂_ω  (annual)    = %10.6f\n", m̂[5])
         @printf("  σ̂²_η (annual)    = %10.6f\n", m̂[6])
-        @printf("  μ̂_ω  (annual)    = %10.6f\n", m̂[7])
-        println("\nStarting Nelder-Mead over (γ, log μω, log σ²ω, arctanh ρω, log σν, ϵ, logit δ)...")
-        println("\n iter │    γ    │    μω   │   σ²ω   │    ρω   │    σν   │    ϵ    │    δ    │   obj")
+        @printf("  μ̂_η  (annual)    = %10.6f\n", m̂[7])
+        println("\nStarting Nelder-Mead over (γ, μη, log σ²η, arctanh ρω, log σν, ϵ, logit δ)...")
+        println("\n iter │    γ    │    μη   │   σ²η   │    ρω   │    σν   │    ϵ    │    δ    │   obj")
         println("──────┼─────────┼─────────┼─────────┼─────────┼─────────┼─────────┼─────────┼──────────")
     end
 
@@ -544,35 +539,34 @@ function estimate_params_ii_full(params_base::Parameters,
 
     function unpack(x)
         γ_n   = clamp(x[1],                γ_lb,  γ_ub)
-        μω_n  = clamp(exp(x[2]),           μω_lb, μω_ub)
-        σω2_n = clamp(exp(x[3]),           σ2_lb, σ2_ub)
+        μη_n  = clamp(x[2],                μη_lb, μη_ub)
+        ση2_n = clamp(exp(x[3]),           σ2_lb, σ2_ub)
         ρω_n  = clamp(tanh(x[4]),          ρ_lb,  ρ_ub)
-        σν_n  = clamp(exp(x[5]),           σν_lb, σν_ub)
+        σν2_n = clamp(exp(x[5]),           σν2_lb, σν2_ub)
         ϵ_n   = clamp(x[6],                ϵ_lb,  ϵ_ub)
         δ_n   = clamp(1/(1+exp(-x[7])),    δ_lb,  δ_ub)
-        return γ_n, μω_n, σω2_n, ρω_n, σν_n, ϵ_n, δ_n
+        return γ_n, μη_n, ση2_n, ρω_n, σν2_n, ϵ_n, δ_n
     end
 
     function obj(x::Vector{Float64})
         iter_count[] += 1
-        γ_n, μω_n, σω2_n, ρω_n, σν_n, ϵ_n, δ_n = unpack(x)
+        γ_n, μη_n, ση2_n, ρω_n, σν2_n, ϵ_n, δ_n = unpack(x)
         try
-            # Reconstruct level variance of ν from fixed level mean and new log-space σν
-            σν2_level_n = μν_level^2 * (exp(σν_n^2) - 1.0)
             params_iter = Parameters(c=params_base.c, fc=params_base.fc,
-                                      μω=μω_n, σω2=σω2_n, ρ_ω=ρω_n, γ=γ_n,
+                                      μη=μη_n, ση2=ση2_n, ρ_ω=ρω_n, γ=γ_n,
                                       δ=δ_n, β=params_base.β, ϵ=ϵ_n,
-                                      μν=μν_level, σν2=σν2_level_n,
-                                      Smax=params_base.Smax, Ns=params_base.Ns)
+                                      μν=params_base.μν, σν2=σν2_n,
+                                      Smax=params_base.Smax, Ns=params_base.Ns,
+                                      size=params_base.size)
             _, _, _, _, ppi, opi, _ = solve_model(params_iter)
             m̃_nt = _simulate_all_moments(params_iter, ppi, opi, n_firms, n_years, seed)
             m̃ = [m̃_nt.avg_isr, m̃_nt.var_isr, m̃_nt.avg_gross_margin,
-                  m̃_nt.γ̂_OLS,  m̃_nt.ρ̂_ω,   m̃_nt.σ̂_η2, m̃_nt.μ̂_ω]
+                  m̃_nt.γ̂_OLS,  m̃_nt.ρ̂_ω,   m̃_nt.σ̂_η2, m̃_nt.μ̂_η]
             sse = sum(w[k] * (m̂[k] - m̃[k])^2 for k in 1:7)
 
             if verbose
                 @printf("  %4d │ %7.4f │ %7.4f │ %7.5f │ %7.4f │ %7.4f │ %7.3f │ %7.4f │ %9.5f\n",
-                        iter_count[], γ_n, μω_n, σω2_n, ρω_n, σν_n, ϵ_n, δ_n, sse)
+                        iter_count[], γ_n, μη_n, ση2_n, ρω_n, σν2_n, ϵ_n, δ_n, sse)
             end
             return sse
         catch
@@ -582,13 +576,12 @@ function estimate_params_ii_full(params_base::Parameters,
     end
 
     # Initial point from params_base
-    σν_init = params_base.σν   # log-space std already stored in params
     x0 = [params_base.γ,
-          log(clamp(exp(params_base.μω),  μω_lb, μω_ub)),
-          log(clamp(params_base.σω2,       σ2_lb, σ2_ub)),
-          atanh(clamp(params_base.ρ_ω,    ρ_lb,  ρ_ub)),
-          log(clamp(σν_init,              σν_lb, σν_ub)),
-          clamp(params_base.ϵ,            ϵ_lb,  ϵ_ub),
+          clamp(params_base.μη,        μη_lb, μη_ub),
+          log(clamp(params_base.ση2,   σ2_lb,  σ2_ub)),
+          atanh(clamp(params_base.ρ_ω, ρ_lb,  ρ_ub)),
+          log(clamp(params_base.σν2, σν2_lb, σν2_ub)),
+          clamp(params_base.ϵ,         ϵ_lb,  ϵ_ub),
           log(clamp(params_base.δ, δ_lb, δ_ub) /
               (1.0 - clamp(params_base.δ, δ_lb, δ_ub)))]
 
@@ -596,23 +589,23 @@ function estimate_params_ii_full(params_base::Parameters,
                              Optim.Options(iterations=max_iter, show_trace=false,
                                            x_abstol=1e-4, g_abstol=1e-4))
 
-    γ̂, μω_est, σω2_est, ρω_est, σν_est, ϵ_est, δ_est = unpack(Optim.minimizer(result))
+    γ̂, μη_est, ση2_est, ρω_est, σν2_est, ϵ_est, δ_est = unpack(Optim.minimizer(result))
 
     if verbose
         println("\n=== Full II Estimation Complete ===")
         println("  Converged : $(Optim.converged(result))")
         @printf("  γ̂         = %10.6f\n", γ̂)
-        @printf("  μ̂ω        = %10.6f\n", μω_est)
-        @printf("  σ̂²ω       = %10.6f\n", σω2_est)
+        @printf("  μ̂η        = %10.6f\n", μη_est)
+        @printf("  σ̂²η       = %10.6f\n", ση2_est)
         @printf("  ρ̂ω        = %10.6f\n", ρω_est)
-        @printf("  σ̂ν        = %10.6f\n", σν_est)
+        @printf("  σ̂ν2       = %10.6f\n", σν2_est)
         @printf("  ϵ̂         = %10.6f\n", ϵ_est)
         @printf("  δ̂         = %10.6f\n", δ_est)
         println("  Objective : $(round(Optim.minimum(result), digits=8))")
     end
 
-    return (γ̂=γ̂, μω=μω_est, σω2=σω2_est, ρω=ρω_est,
-            σν=σν_est, ϵ̂=ϵ_est, δ̂=δ_est,
+    return (γ̂=γ̂, μη=μη_est, ση2=ση2_est, ρω=ρω_est,
+            σν2=σν2_est, ϵ̂=ϵ_est, δ̂=δ_est,
             obj_value=Optim.minimum(result), result=result)
 end
 
@@ -640,12 +633,12 @@ Start Julia with `julia --threads=N` (or set the environment variable
                     all 7 parameters) or a length-7 `Vector{Int}` in the order
                     `[γ, μω, σω2, ρω, σν, ϵ, δ]`.
 - `γ_range`       : `(lb, ub)` for the γ grid.
-- `μω_range`      : `(lb, ub)` for the μω grid (**level** mean of ω; the
-                    constructor converts this to log-space internally).
+- `μη_range`      : `(lb, ub)` for the μη grid (AR(1) innovation mean; passed directly
+                    to the constructor as-is).
 - `σω2_range`     : `(lb, ub)` for the σω2 grid (level innovation variance).
 - `ρω_range`      : `(lb, ub)` for the ρω grid.
-- `σν_range`      : `(lb, ub)` for σν (**log-space** std-dev of ν, stored as
-                    `params.σν`).
+- `σν_range`      : `(lb, ub)` for σν (**log-space** std-dev of ν, accessed as
+                    `params.dist.σ`).
 - `ϵ_range`       : `(lb, ub)` for the demand-elasticity grid.
 - `δ_range`       : `(lb, ub)` for the depreciation-rate grid.
 - `n_firms`       : Firms simulated per grid point.
@@ -655,17 +648,17 @@ Start Julia with `julia --threads=N` (or set the environment variable
 - `output_path`   : Path to the output CSV file.
 
 # Returns
-A `DataFrame` with parameter columns `γ, μω, σω2, ρω, σν, ϵ, δ` and moment
-columns `avg_isr, var_isr, avg_gross_margin, γ̂_OLS, ρ̂_ω, σ̂_η2, μ̂_ω, failed`.
+A `DataFrame` with parameter columns `γ, μη, ση2, ρω, σν, ϵ, δ` and moment
+columns `avg_isr, var_isr, avg_gross_margin, γ̂_OLS, ρ̂_ω, σ̂_η2, μ̂_η, failed`.
 `failed = true` indicates the model could not be solved at those parameters.
 """
 function compute_moments_on_grid(params_base::Parameters;
                                   n_grid                    = 5,
                                   γ_range::Tuple            = (0.5, 1.5),
-                                  μω_range::Tuple           = (0.05, 2.0),
-                                  σω2_range::Tuple          = (0.01, 0.3),
+                                  μη_range::Tuple           = (-3.0, 1.0),
+                                  ση2_range::Tuple          = (0.01, 0.3),
                                   ρω_range::Tuple           = (0.0, 0.9),
-                                  σν_range::Tuple           = (0.1, 1.5),
+                                  σν2_range::Tuple          = (0.1, 1.5),
                                   ϵ_range::Tuple            = (2.0, 15.0),
                                   δ_range::Tuple            = (0.01, 0.3),
                                   n_firms::Int              = 200,
@@ -679,31 +672,31 @@ function compute_moments_on_grid(params_base::Parameters;
 
     # --- Build individual parameter grids -----------------------------------
     γ_grid   = collect(LinRange(Float64(γ_range[1]),   Float64(γ_range[2]),   ng[1]))
-    μω_grid  = collect(LinRange(Float64(μω_range[1]),  Float64(μω_range[2]),  ng[2]))
-    σω2_grid = collect(LinRange(Float64(σω2_range[1]), Float64(σω2_range[2]), ng[3]))
+    μη_grid  = collect(LinRange(Float64(μη_range[1]),  Float64(μη_range[2]),  ng[2]))
+    ση2_grid = collect(LinRange(Float64(ση2_range[1]), Float64(ση2_range[2]), ng[3]))
     ρω_grid  = collect(LinRange(Float64(ρω_range[1]),  Float64(ρω_range[2]),  ng[4]))
-    σν_grid  = collect(LinRange(Float64(σν_range[1]),  Float64(σν_range[2]),  ng[5]))
+    σν2_grid = collect(LinRange(Float64(σν2_range[1]), Float64(σν2_range[2]), ng[5]))
     ϵ_grid   = collect(LinRange(Float64(ϵ_range[1]),   Float64(ϵ_range[2]),   ng[6]))
     δ_grid   = collect(LinRange(Float64(δ_range[1]),   Float64(δ_range[2]),   ng[7]))
 
-    # Fixed level mean of ν (held constant across grid points)
-    μν_level = exp(params_base.μν + 0.5 * params_base.σν2)
+    # Fixed level mean of ν (stored directly in params_base.μν)
+    μν_level = params_base.μν
 
     # --- Enumerate all Cartesian combinations --------------------------------
-    combos  = collect(Iterators.product(γ_grid, μω_grid, σω2_grid,
-                                         ρω_grid, σν_grid, ϵ_grid, δ_grid))
+    combos  = collect(Iterators.product(γ_grid, μη_grid, ση2_grid,
+                                         ρω_grid, σν2_grid, ϵ_grid, δ_grid))
     n_total = length(combos)
 
     @printf("Grid search: %d total points  (%d threads available)\n",
             n_total, Threads.nthreads())
-    @printf("Grid sizes : γ=%d  μω=%d  σω2=%d  ρω=%d  σν=%d  ϵ=%d  δ=%d\n", ng...)
+    @printf("Grid sizes : γ=%d  μη=%d  ση2=%d  ρω=%d  σν2=%d  ϵ=%d  δ=%d\n", ng...)
 
     # --- Pre-allocate result arrays -----------------------------------------
     out_γ    = Vector{Float64}(undef, n_total)
-    out_μω   = Vector{Float64}(undef, n_total)
-    out_σω2  = Vector{Float64}(undef, n_total)
+    out_μη   = Vector{Float64}(undef, n_total)
+    out_ση2  = Vector{Float64}(undef, n_total)
     out_ρω   = Vector{Float64}(undef, n_total)
-    out_σν   = Vector{Float64}(undef, n_total)
+    out_σν2  = Vector{Float64}(undef, n_total)
     out_ϵ    = Vector{Float64}(undef, n_total)
     out_δ    = Vector{Float64}(undef, n_total)
 
@@ -713,7 +706,7 @@ function compute_moments_on_grid(params_base::Parameters;
     out_γ_ols    = fill(NaN, n_total)
     out_ρω_ar1   = fill(NaN, n_total)
     out_σ_η2     = fill(NaN, n_total)
-    out_μω_ar1   = fill(NaN, n_total)
+    out_μη_ar1   = fill(NaN, n_total)
     out_failed   = fill(true, n_total)
 
     # --- Progress tracking --------------------------------------------------
@@ -724,32 +717,32 @@ function compute_moments_on_grid(params_base::Parameters;
 
     # --- Main parallel loop -------------------------------------------------
     Threads.@threads for idx in 1:n_total
-        γ_i, μω_i, σω2_i, ρω_i, σν_i, ϵ_i, δ_i = combos[idx]
+        γ_i, μη_i, ση2_i, ρω_i, σν2_i, ϵ_i, δ_i = combos[idx]
 
         out_γ[idx]   = γ_i
-        out_μω[idx]  = μω_i
-        out_σω2[idx] = σω2_i
+        out_μη[idx]  = μη_i
+        out_ση2[idx] = ση2_i
         out_ρω[idx]  = ρω_i
-        out_σν[idx]  = σν_i
+        out_σν2[idx] = σν2_i
         out_ϵ[idx]   = ϵ_i
         out_δ[idx]   = δ_i
 
         try
-            σν2_level_i = μν_level^2 * (exp(σν_i^2) - 1.0)
             params_i = Parameters(
                 c    = params_base.c,
                 fc   = params_base.fc,
-                μω   = μω_i,          # constructor expects level mean
-                σω2  = σω2_i,
+                μη   = μη_i,
+                ση2  = ση2_i,
                 ρ_ω  = ρω_i,
                 γ    = γ_i,
                 δ    = δ_i,
                 β    = params_base.β,
                 ϵ    = ϵ_i,
                 μν   = μν_level,
-                σν2  = σν2_level_i,
+                σν2  = σν2_i,
                 Smax = params_base.Smax,
-                Ns   = params_base.Ns)
+                Ns   = params_base.Ns,
+                size = params_base.size)
 
             _, _, _, _, ppi, opi, _ = solve_model(params_i)
             m̃ = _simulate_all_moments(params_i, ppi, opi, n_firms, n_years, seed)
@@ -760,7 +753,7 @@ function compute_moments_on_grid(params_base::Parameters;
             out_γ_ols[idx]    = m̃.γ̂_OLS
             out_ρω_ar1[idx]   = m̃.ρ̂_ω
             out_σ_η2[idx]     = m̃.σ̂_η2
-            out_μω_ar1[idx]   = m̃.μ̂_ω
+            out_μη_ar1[idx]   = m̃.μ̂_η
             out_failed[idx]   = false
         catch
             # Leave NaN outputs and failed = true
@@ -787,10 +780,10 @@ function compute_moments_on_grid(params_base::Parameters;
     # --- Assemble and save --------------------------------------------------
     df_out = DataFrame(
         γ                = out_γ,
-        μω               = out_μω,
-        σω2              = out_σω2,
+        μη               = out_μη,
+        ση2              = out_ση2,
         ρω               = out_ρω,
-        σν               = out_σν,
+        σν2              = out_σν2,
         ϵ                = out_ϵ,
         δ                = out_δ,
         avg_isr          = out_avg_isr,
@@ -799,7 +792,7 @@ function compute_moments_on_grid(params_base::Parameters;
         γ_OLS            = out_γ_ols,
         ρ_ω              = out_ρω_ar1,
         σ_η2             = out_σ_η2,
-        μ_ω              = out_μω_ar1,
+        μ_η              = out_μη_ar1,
         failed           = out_failed)
 
     CSV.write(output_path, df_out)

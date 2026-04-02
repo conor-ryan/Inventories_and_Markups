@@ -2,22 +2,23 @@ using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Plots, Interpola
 include("ModelFunctions.jl")
 include("EstimationFunctions.jl")
 
-params = Parameters(c=1.0, fc=0.0, μω=0.2,σω2=0.05,ρ_ω=0.1, γ=0.9,δ=0.01, β=0.95, ϵ=8.0, μν=100, σν2=exp(7), Smax=100, Ns=200,scale=1.0,size=3.0)
+params = Parameters(c=1.0, fc=0.0, μη=log(0.1),ση2=0.05,ρ_ω=0.1, γ=0.9,δ=0.05, β=0.95, ϵ=8.0, μν=1, σν2=0.09, Smax=20, Ns=200,scale=1.0,size=100)
 
-# ---------------------------------------------------
-# Single-iteration benchmark (run interactively before the full solve)
-# ---------------------------------------------------
-println("Benchmarking one value-function iteration...")
-display(@benchmark solve_value_function($params, maxiter=1000,fast_interp=true) samples=10 evals=1)
 
-# ---------------------------------------------------
-# Profile one iteration and display a flat time profile
-# ---------------------------------------------------
-println("\nProfiling one value-function iteration...")
-Profile.clear()
-@profile solve_value_function(params, maxiter=1000)
-Profile.print(sortedby=:count, mincount=25)
-# ---------------------------------------------------
+# # ---------------------------------------------------
+# # Single-iteration benchmark (run interactively before the full solve)
+# # ---------------------------------------------------
+# println("Benchmarking one value-function iteration...")
+# display(@benchmark solve_value_function($params, maxiter=1000,fast_interp=true) samples=10 evals=1)
+
+# # ---------------------------------------------------
+# # Profile one iteration and display a flat time profile
+# # ---------------------------------------------------
+# println("\nProfiling one value-function iteration...")
+# Profile.clear()
+# @profile solve_value_function(params, maxiter=1000)
+# Profile.print(sortedby=:count, mincount=25)
+# # ---------------------------------------------------
 
 Sgrid = params.Sgrid
 Smax = params.Smax
@@ -115,10 +116,7 @@ p2 = plot(Sgrid, [V V_by_omega[:, j_low] V_by_omega[:, j_med] V_by_omega[:, j_hi
 p3 = plot(Sgrid, [order_policy_integrated order_policy[:, j_low] order_policy[:, j_med] order_policy[:, j_high]],
     xlabel="Inventory Level (s)", ylabel="Orders", title="Order Policy",
     label=ω_slice_labels, linewidth=2, linestyle=[:solid :dash :dot :dashdot])
-stockout_ind = findall(inv_eop_sim .< 1e-8) .+ 1
-stockout_ind = stockout_ind[stockout_ind .<= length(inventory_sim)]
-post_stockout_bop = inventory_sim[stockout_ind]
-p4 = histogram(post_stockout_bop, xlabel="Inventory Level (s)", ylabel="Frequency", title="BOP Inventory After Stockout", legend=false, bins=30)
+p4 = histogram(inventory_sim, xlabel="Inventory Level (s)", ylabel="Frequency", title="BOP Inventory Distribution", legend=false, bins=50)
 p5 = plot(Sgrid, [stockouts stockouts_by_omega[:, j_low] stockouts_by_omega[:, j_med] stockouts_by_omega[:, j_high]],
     xlabel="Inventory Level (s)", ylabel="Stockout Probability", title="Stockout Probability",
     label=ω_slice_labels, linewidth=2, linestyle=[:solid :dash :dot :dashdot])
@@ -279,4 +277,4 @@ display(combined_plot)
 # # ---------------------------------------------------
 # γ̂_BC, μω_est, σω2_est, ρω_est = estimate_gamma_bc(params, df_reg_Δ)
 # println("True γ:                     $(params.γ)")
-# println("True  ω parameters —  μω: $(round(0.1, digits=6))         σω2: $(round(params.σω2, digits=6))   ρω: $(round(params.ρ_ω, digits=6))")
+# println("True  ω parameters —  μη: $(round(params.μη, digits=6))         ση2: $(round(params.ση2, digits=6))   ρω: $(round(params.ρ_ω, digits=6))")

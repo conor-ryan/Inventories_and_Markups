@@ -176,9 +176,9 @@ end
 # Main: solve model, simulate panel, save to CSV
 # ---------------------------------------------------
 
-params = Parameters(c=1.2, fc=0.0, μω=0.1, σω2=0.05, ρ_ω=0.1, γ=0.9,
-                    δ=0.05, β=0.95, ϵ=6.0, μν=100, σν2=exp(7),
-                    Smax=50, Ns=200, scale=1.0, size=3.0)
+params = Parameters(c=1.0, fc=0.0, μη=log(0.1), ση2=0.05, ρ_ω=0.1, γ=0.9,
+                    δ=0.05, β=0.95, ϵ=6.0, μν=1, σν2=0.09, 
+                    Smax=30, Ns=200, scale=1.0, size=100)
 
 println("Solving model...")
 p_policy, order_policy, V, V_by_omega, price_policy_interp, order_policy_interp, Vinterp =
@@ -230,8 +230,8 @@ println("Annual data written to  $annual_path")
 # println("\n=== True vs Estimated (cost-shock estimator) ===")
 # println("Parameter   True          Estimated (monthly)")
 # @printf("γ           %10.6f    %10.6f\n", params.γ,       ii_result.γ̂)
-# @printf("μω          %10.6f    %10.6f\n", exp(params.μω), ii_result.μω_monthly)
-# @printf("σω2         %10.6f    %10.6f\n", params.σω2,     ii_result.σω2_monthly)
+# @printf("μη          %10.6f    %10.6f\n", params.μη, ii_result.μη_monthly)
+# @printf("ση2         %10.6f    %10.6f\n", params.ση2,     ii_result.ση2_monthly)
 # @printf("ρω          %10.6f    %10.6f\n", params.ρ_ω,     ii_result.ρω_monthly)
 
 # ---------------------------------------------------
@@ -246,9 +246,9 @@ mo_moments = compute_monthly_moments(df_monthly)
 
 println("\n=== Estimating all 7 parameters via Full Indirect Inference ===")
 rng_init = Random.MersenneTwister(999)
-params_init = Parameters(c=1.0, fc=0.0, μω=0.2,σω2=0.01,ρ_ω=0.2, γ=0.8,δ=0.2, β=0.95, ϵ=8.0, μν=100, σν2=exp(8), Smax=100, Ns=200,scale=1.0,size=3.0)
+# params_init = Parameters(c=1.0, fc=0.0, μη=0.8*log(0.2),ση2=0.01,ρ_ω=0.2, γ=0.8,δ=0.2, β=0.95, ϵ=8.0, μν=100, σν2=exp(8), Smax=100, Ns=200,scale=1.0,size=3.0)
 
-ii_full = estimate_params_ii_full(params_init, df_monthly, df_annual;
+ii_full = estimate_params_ii_full(params, df_monthly, df_annual;
                                    n_firms  = 100,
                                    n_years  = 25,
                                    max_iter = 500,
@@ -258,9 +258,9 @@ ii_full = estimate_params_ii_full(params_init, df_monthly, df_annual;
 println("\n=== True vs Estimated (full 7-parameter estimator) ===")
 println("Parameter   True          Estimated")
 @printf("γ           %10.6f    %10.6f\n", params.γ,       ii_full.γ̂)
-@printf("μω          %10.6f    %10.6f\n", exp(params.μω), ii_full.μω)
-@printf("σω2         %10.6f    %10.6f\n", params.σω2,     ii_full.σω2)
+@printf("μη           %10.6f    %10.6f\n", params.μη, ii_full.μη)
+@printf("ση2         %10.6f    %10.6f\n", params.ση2,     ii_full.ση2)
 @printf("ρω          %10.6f    %10.6f\n", params.ρ_ω,     ii_full.ρω)
-@printf("σν          %10.6f    %10.6f\n", params.σν,      ii_full.σν)
+@printf("σν2         %10.6f    %10.6f\n", params.σν2,     ii_full.σν2)
 @printf("ϵ           %10.6f    %10.6f\n", params.ϵ,       ii_full.ϵ̂)
 @printf("δ           %10.6f    %10.6f\n", params.δ,       ii_full.δ̂)

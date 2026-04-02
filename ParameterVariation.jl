@@ -64,7 +64,7 @@ function run_parameter_variation(; δ_grid=range(0.05, 0.40, length=5),
             println("\n=== Parameter Set $idx / $(length(param_list)) ===")
             println("Parameters: c=$(round(params.c, digits=4)), fc=$(round(params.fc, digits=4)), δ=$(round(params.δ, digits=4)), " *
                    "β=$(round(params.β, digits=4)), ϵ=$(round(params.ϵ, digits=4)), " *
-                   "μν=$(round(params.μν, digits=4)), σν=$(round(params.σν, digits=4))")
+                   "μν=$(round(params.μν, digits=4)), σν=$(round(params.dist.σ, digits=4))")
         end
         
         try
@@ -91,8 +91,8 @@ function run_parameter_variation(; δ_grid=range(0.05, 0.40, length=5),
                 :β => params.β,
                 :ϵ => params.ϵ,
                 :μ => params.μν,
-                :σ => params.σν,
-                :σν2 => params.σν2_level,
+                :σ => params.dist.σ,
+                :σν2 => params.σν2,
                 # Statistics
                 :avg_inventory => stats.avg_inventory,
                 :var_inventory => stats.var_inventory,

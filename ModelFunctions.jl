@@ -6,9 +6,8 @@ using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Interpolations
 struct Parameters
     c::Float64
     fc::Float64
-    μω::Float64               # unconditional mean of log(ω)
-    σω2::Float64              # AR(1) innovation variance σ_η^2
-    σω::Float64               # AR(1) innovation std σ_η
+    μη::Float64               # AR(1) innovation mean (intercept of log(ω) AR(1) process)
+    ση2::Float64              # AR(1) innovation variance σ_η^2
     ρ_ω::Float64              # AR(1) persistence of log(ω)
     Q_ω::Int64                # number of omega grid points
     ω_grid::Vector{Float64}   # Qω omega values in levels
@@ -18,10 +17,8 @@ struct Parameters
     δ::Float64
     β::Float64
     ϵ::Float64
-    μν::Float64
-    σν2::Float64
-    σν::Float64
-    σν2_level::Float64
+    μν::Float64               # level mean of demand shock ν
+    σν2::Float64              # level variance of demand shock ν
     dist::LogNormal
     Q::Int64
     quad_nodes::Vector{Float64}
@@ -30,14 +27,16 @@ struct Parameters
     Smax::Float64
     Ns::Int64
     Sgrid::Vector{Float64}
+    size::Float64
 
-    function Parameters(; c=1.0, fc=0.0, μω=1.0, σω2=0.0, ρ_ω=0.9, γ=1.0, δ=0.2, β=0.95, ϵ=2.0, μν=100, σν2=2832, Q=19, Q_ω=7, scale=1.0, size=1.0, Smax=50.0, Ns=800)
+    function Parameters(; c=1.0, fc=0.0, μη=0.0, ση2=0.0, ρ_ω=0.9, γ=1.0, δ=0.2, β=0.95, ϵ=2.0, μν=100, σν2=2832, Q=19, Q_ω=7, scale=1.0, size=1.0, Smax=50.0, Ns=800)
         x, w = gausshermite(Q)
 
         scale_parameter = scale^(ϵ)
         c = c * scale
         μν = μν * scale_parameter * size
         σν2 = σν2 * scale_parameter^2 * size^2
+        μη = μη + (1-ρ_ω)*log(scale) + (1-ρ_ω)*log(size^(1-γ))
 
         # Compute log-space parameters from mean and variance of ν
         σ2 = log(1 + σν2 / μν^2)
@@ -47,14 +46,13 @@ struct Parameters
         # Transform quadrature nodes to lognormal draws (ν-space)
         x_lognormal = [exp(μ + sqrt(2) * σ * x[i]) for i in 1:Q]
 
-        # AR(1) for log(ω): log(ω_t) = μ_log_ω + ρ_ω*(log(ω_{t-1}) - μ_log_ω) + σ_η * ε_t
-        # μω input is the level mean; store the log mean in params.μω
-        μ_log_ω = log(μω)
-        σ_η     = sqrt(max(σω2, 0.0))
+        # μη is the AR(1) intercept (mean of innovation η); unconditional log-mean of ω = μη / (1 − ρ_ω)
+        μ_log_ω = abs(1 - ρ_ω) > 1e-10 ? μη / (1 - ρ_ω) : μη
+        σ_η     = sqrt(max(ση2, 0.0))
 
         # Tauchen discretization of the AR(1) in log(ω)
-        if σω2 <= 0.0 || Q_ω <= 1
-            ω_grid_vec = [μω]
+        if ση2 <= 0.0 || Q_ω <= 1
+            ω_grid_vec = [exp(μ_log_ω)]   # single grid point at the unconditional level mean
             P_ω_mat    = ones(1, 1)
             π_ω_vec    = [1.0]
         else
@@ -93,8 +91,11 @@ struct Parameters
         # Create inventory state grid
         Sgrid_vec = collect(range(1e-4, Smax, length=Ns))
 
-        new(c, fc, μ_log_ω, σω2, σ_η, ρ_ω, length(ω_grid_vec), ω_grid_vec, P_ω_mat, π_ω_vec,
-            γ, δ, β, ϵ, μ, σ2, σ, σν2, LogNormal(μ, σ), Q, x, w, x_lognormal, Smax, Ns, Sgrid_vec)
+        μν = μν / (scale_parameter * size)
+        σν2 = σν2 / (scale_parameter^2 * size^2)
+
+        new(c, fc, μη, ση2, ρ_ω, length(ω_grid_vec), ω_grid_vec, P_ω_mat, π_ω_vec,
+            γ, δ, β, ϵ, μν, σν2, LogNormal(μ, σ), Q, x, w, x_lognormal, Smax, Ns, Sgrid_vec,size)
     end
 end
 
@@ -155,22 +156,15 @@ function update_parameters(params::Parameters, x::Vector{Float64})
     σν2_new = exp(x[2])
     ϵ_new = x[3]
     
-    # # Recalculate log-space parameters with new σν2 and ϵ
-    # scale_parameter = (1.0)^(ϵ_new)  # scale is 1.0 by default in our use case
-    # μν_scaled = params.μν  # Already stored in log space, but need original for calculation
-    # σ2_new = log(1 + σν2_new / (exp(params.μν) + 0.5 * params.σν^2)^2)
-    # σ_new = sqrt(σ2_new)
-    μ_params = exp(params.μν + 0.5 * params.σν^2) 
-    
-    # # Transform quadrature nodes to lognormal draws (v-space) with new σ and μ
-    # x_lognormal_new = [exp(μ_new + sqrt(2) * σ_new * params.quad_nodes[i]) for i in 1:params.Q]
-    
+    # params.μν stores the level mean of ν; pass it directly to the constructor
+    μ_params = params.μν
+
     # Create new Parameters object
     return Parameters(
         c   = params.c,
         fc  = params.fc,
-        μω  = exp(params.μω),   # params.μω stores log-mean; constructor expects level mean
-        σω2 = params.σω2,
+        μη  = params.μη,
+        ση2 = params.ση2,
         ρ_ω = params.ρ_ω,
         γ   = params.γ,
         δ   = δ_new,
@@ -181,7 +175,8 @@ function update_parameters(params::Parameters, x::Vector{Float64})
         Q   = params.Q,
         Q_ω = params.Q_ω,
         Smax = params.Smax,
-        Ns   = params.Ns
+        Ns   = params.Ns,
+        size = params.size
     )
 end
 
@@ -362,15 +357,13 @@ end
 Compute the truncated mean of the lognormal distribution.
 """
 function truncated_lognormal_mean(νbar, params)
-    # Use stored log-space parameters (matching SolveModel.jl)
-    σ2 = params.σν2
-    σ  = params.σν
-    μ  = params.μν
+    μ_log = params.dist.μ   # log-space mean of ν
+    σ_log = params.dist.σ   # log-space std of ν
 
-    z1 = (log(νbar) - μ - σ2) / σ
-    z0 = (log(νbar) - μ) / σ
+    z1 = (log(νbar) - μ_log - σ_log^2) / σ_log
+    z0 = (log(νbar) - μ_log) / σ_log
 
-    return exp(μ + 0.5 * σ2) * cdf(Normal(), z1) / cdf(Normal(), z0)
+    return exp(μ_log + 0.5 * σ_log^2) * cdf(Normal(), z1) / cdf(Normal(), z0)
 end
 
 
