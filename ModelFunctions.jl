@@ -324,7 +324,7 @@ function solve_value_function(params; tol=1e-4, maxiter=1000, full=false, fast_i
                     n_policy_current[i, j] = n_t
                     p_policy_current[i, j] = p_t
                     if n_t > 0.0
-                        n_upper_curr = n_t * 1.01
+                        n_upper_curr = max(n_t * 1.01,params.Sgrid[2])
                     end
                     p_upper_curr = p_t * 1.01
                 end
@@ -646,7 +646,16 @@ function maximize_expected_value_choice(s_i::Int, ω::Float64, Vinterp, params::
 
     obj(x) = -expected_value_choice(x[1], x[2], s_i, ω, Vinterp, params)
 
-    result    = Optim.optimize(obj, lower, upper, x0, Fminbox(NelderMead()))
+    local result
+    try
+        result = Optim.optimize(obj, lower, upper, x0, Fminbox(NelderMead()))
+    catch e
+        println("ERROR in maximize_expected_value_choice at s_i=$s_i (s=$(params.Sgrid[s_i])), ω=$ω")
+        println("  lower = [n=$(lower[1]), p=$(lower[2])]")
+        println("  upper = [n=$(upper[1]), p=$(upper[2])]")
+        println("  x0    = [n=$(x0[1]), p=$(x0[2])]")
+        rethrow(e)
+    end
     n_opt     = result.minimizer[1]
     p_opt     = result.minimizer[2]
     value_max = -result.minimum
