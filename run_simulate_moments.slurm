@@ -19,11 +19,4 @@ module load julia
 
 JULIA_BIN=${JULIA_BIN:-julia}
 THREADS=${SLURM_CPUS_PER_TASK:-1}
-
-if [[ -f ~/work/Research/CRW_Inventory_Competition/Code/Project.toml ]]; then
-  ${JULIA_BIN} --project=~/work/Research/CRW_Inventory_Competition/Code --threads=${THREADS} -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
-  ${JULIA_BIN} --project=~/work/Research/CRW_Inventory_Competition/Code --threads=${THREADS} SimulateMoments.jl
-else
-  echo "Project.toml not found in Code. Running without --project." >&2
-  ${JULIA_BIN} --threads=${THREADS} SimulateMoments.jl
-fi
+${JULIA_BIN} --threads=${THREADS} SimulateMoments.jl

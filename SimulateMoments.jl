@@ -1,4 +1,4 @@
-using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Plots, Interpolations, LineSearch, Random, Statistics, DataFrames, GLM, FixedEffectModels, Printf, CSV
+using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Plots, Interpolations, Random, Statistics, DataFrames, GLM, FixedEffectModels, Printf, CSV
 
 include("ModelFunctions.jl")
 include("EstimationFunctions.jl")
