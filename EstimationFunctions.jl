@@ -611,39 +611,29 @@ end
 
 
 """
-    compute_moments_on_grid(params_base; n_grid, γ_range, μω_range, σω2_range,
-                            ρω_range, σν_range, ϵ_range, δ_range,
+    compute_moments_on_grid(params_base, param_vectors;
                             n_firms, n_years, seed, output_path)
 
-Evaluate all 7 estimation moments on a Cartesian grid of parameter values.
+Evaluate all 7 estimation moments on an explicit list of parameter vectors.
 
-For every combination of (γ, μω, σω2, ρω, σν, ϵ, δ) grid points the function
-solves the model, simulates `n_firms × n_years × 12` months of panel data, and
-records the moments used in `estimate_params_ii_full`.  Results are written to a
-CSV file.
+Each element of `param_vectors` must be a length-7 vector ordered as
+`[γ, μη, ση2, ρω, σν2, ϵ, δ]`.
+
+For every parameter vector, the function solves the model, simulates
+`n_firms × n_years × 12` months of panel data, and records the moments used in
+`estimate_params_ii_full`. Results are written to a CSV file.
 
 **Parallelisation:** the loop over grid points runs with `Threads.@threads`.
 Start Julia with `julia --threads=N` (or set the environment variable
 `JULIA_NUM_THREADS=N`) to exploit multiple cores.
 
-# Arguments
 - `params_base`   : `Parameters` object; `c`, `fc`, `β`, `μν`, `Smax`, `Ns`
                     are held fixed at their values here.
-- `n_grid`        : Grid points per parameter.  Either a single `Int` (same for
-                    all 7 parameters) or a length-7 `Vector{Int}` in the order
-                    `[γ, μω, σω2, ρω, σν, ϵ, δ]`.
-- `γ_range`       : `(lb, ub)` for the γ grid.
-- `μη_range`      : `(lb, ub)` for the μη grid (AR(1) innovation mean; passed directly
-                    to the constructor as-is).
-- `σω2_range`     : `(lb, ub)` for the σω2 grid (level innovation variance).
-- `ρω_range`      : `(lb, ub)` for the ρω grid.
-- `σν_range`      : `(lb, ub)` for σν (**log-space** std-dev of ν, accessed as
-                    `params.dist.σ`).
-- `ϵ_range`       : `(lb, ub)` for the demand-elasticity grid.
-- `δ_range`       : `(lb, ub)` for the depreciation-rate grid.
-- `n_firms`       : Firms simulated per grid point.
+- `param_vectors` : Vector of vectors, one per evaluation point, each with 7
+                    entries in the order `[γ, μη, ση2, ρω, σν2, ϵ, δ]`.
+- `n_firms`       : Firms simulated per parameter vector.
 - `n_years`       : Years simulated per firm (months = `n_years × 12`).
-- `seed`          : Random seed, held fixed across grid points so moments are
+- `seed`          : Random seed, held fixed across parameter vectors so moments are
                     comparable under the same simulation draws.
 - `output_path`   : Path to the output CSV file.
 
@@ -652,44 +642,30 @@ A `DataFrame` with parameter columns `γ, μη, ση2, ρω, σν, ϵ, δ` and m
 columns `avg_isr, var_isr, avg_gross_margin, γ̂_OLS, ρ̂_ω, σ̂_η2, μ̂_η, failed`.
 `failed = true` indicates the model could not be solved at those parameters.
 """
-function compute_moments_on_grid(params_base::Parameters;
-                                  n_grid                    = 5,
-                                  γ_range::Tuple            = (0.5, 1.5),
-                                  μη_range::Tuple           = (-3.0, 1.0),
-                                  ση2_range::Tuple          = (0.01, 0.3),
-                                  ρω_range::Tuple           = (0.0, 0.9),
-                                  σν2_range::Tuple          = (0.1, 1.5),
-                                  ϵ_range::Tuple            = (2.0, 15.0),
-                                  δ_range::Tuple            = (0.01, 0.3),
+function compute_moments_on_grid(params_base::Parameters,
+                                  param_vectors::AbstractVector{<:AbstractVector{<:Real}};
                                   n_firms::Int              = 200,
                                   n_years::Int              = 20,
                                   seed::Int                 = 212311,
                                   output_path::String       = "grid_moments.csv")
 
-    # --- Expand n_grid to a length-7 vector ---------------------------------
-    ng = (n_grid isa Int) ? fill(n_grid, 7) : collect(Int, n_grid)
-    length(ng) == 7 || error("n_grid must be an Int or a length-7 Vector{Int}")
+    # --- Validate and convert user-supplied parameter vectors ---------------
+    n_total = length(param_vectors)
+    n_total > 0 || error("param_vectors must contain at least one parameter vector")
 
-    # --- Build individual parameter grids -----------------------------------
-    γ_grid   = collect(LinRange(Float64(γ_range[1]),   Float64(γ_range[2]),   ng[1]))
-    μη_grid  = collect(LinRange(Float64(μη_range[1]),  Float64(μη_range[2]),  ng[2]))
-    ση2_grid = collect(LinRange(Float64(ση2_range[1]), Float64(ση2_range[2]), ng[3]))
-    ρω_grid  = collect(LinRange(Float64(ρω_range[1]),  Float64(ρω_range[2]),  ng[4]))
-    σν2_grid = collect(LinRange(Float64(σν2_range[1]), Float64(σν2_range[2]), ng[5]))
-    ϵ_grid   = collect(LinRange(Float64(ϵ_range[1]),   Float64(ϵ_range[2]),   ng[6]))
-    δ_grid   = collect(LinRange(Float64(δ_range[1]),   Float64(δ_range[2]),   ng[7]))
+    combos = Vector{NTuple{7, Float64}}(undef, n_total)
+    for i in eachindex(param_vectors)
+        p = param_vectors[i]
+        length(p) == 7 || error("param_vectors[$i] must have exactly 7 entries")
+        combos[i] = (Float64(p[1]), Float64(p[2]), Float64(p[3]), Float64(p[4]),
+                     Float64(p[5]), Float64(p[6]), Float64(p[7]))
+    end
 
     # Fixed level mean of ν (stored directly in params_base.μν)
     μν_level = params_base.μν
 
-    # --- Enumerate all Cartesian combinations --------------------------------
-    combos  = collect(Iterators.product(γ_grid, μη_grid, ση2_grid,
-                                         ρω_grid, σν2_grid, ϵ_grid, δ_grid))
-    n_total = length(combos)
-
-    @printf("Grid search: %d total points  (%d threads available)\n",
+    @printf("Parameter sweep: %d total points  (%d threads available)\n",
             n_total, Threads.nthreads())
-    @printf("Grid sizes : γ=%d  μη=%d  ση2=%d  ρω=%d  σν2=%d  ϵ=%d  δ=%d\n", ng...)
 
     # --- Pre-allocate result arrays -----------------------------------------
     out_γ    = Vector{Float64}(undef, n_total)

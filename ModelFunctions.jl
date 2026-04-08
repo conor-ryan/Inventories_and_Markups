@@ -293,7 +293,7 @@ end
 Solve the value function using value function iteration.
 Returns the value function and optimal order policy.
 """
-function solve_value_function(params; tol=1e-4, maxiter=1000, full=false, fast_interp=true)
+function solve_value_function(params; tol=1e-4, maxiter=1000, full=false, fast_interp=true,verbose=false)
     Sgrid = params.Sgrid
     Ns = params.Ns
     ω_grid = params.ω_grid
@@ -351,7 +351,9 @@ function solve_value_function(params; tol=1e-4, maxiter=1000, full=false, fast_i
         iter += 1
     end
 
-    println("Initial Value Function Solved at $iter iterations")
+    if verbose
+        println("Initial Value Function Solved at $iter iterations")
+    end
 
     if full
         p_lower = params.c * 0.5
@@ -391,10 +393,13 @@ function solve_value_function(params; tol=1e-4, maxiter=1000, full=false, fast_i
             p_policy_prev .= p_policy_current
             V_by_omega .= V_by_omega_new
             iter += 1
-            println("At Iteration $iter, Error: $diff")
+            if verbose
+                println("At Iteration $iter, Error: $diff")
+            end
         end
-
-        println("Full Value Function Solved at $iter iterations")
+        if verbose
+            println("Full Value Function Solved at $iter iterations")
+        end
     end
 
     # Ex-ante value: average over ergodic ω distribution
