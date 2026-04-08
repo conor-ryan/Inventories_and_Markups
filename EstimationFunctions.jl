@@ -386,17 +386,17 @@ end
 
 Compute three moments from a monthly balanced panel:
 1. `avg_isr`          — mean of BOM-inventory-to-revenue ratio
-2. `var_isr`          — variance of BOM-inventory-to-revenue ratio
+2. `var_log1p_isr`    — variance of `log(1 +` BOM-inventory-to-revenue ratio `)`
 3. `avg_gross_margin` — mean of revenue / COGS  (= mean of p/c)
 
 `df_monthly` must have columns `inv_to_sales`, `revenue`, `cogs`.
 """
 function compute_monthly_moments(df_monthly::DataFrame)
-    valid = (df_monthly.inv_to_sales .> 0) .& isfinite.(df_monthly.inv_to_sales) .&
-            (df_monthly.revenue .> 0) .& (df_monthly.cogs .> 0)
+    valid = (df_monthly.revenue .> 0)
     isr = df_monthly.inv_to_sales[valid]
     gm  = df_monthly.revenue[valid] ./ df_monthly.cogs[valid]
-    return (avg_isr=mean(isr), var_isr=var(isr), avg_gross_margin=mean(gm))
+    log1p_isr = log1p.(isr)
+    return (avg_isr=mean(isr), var_log1p_isr=var(log1p_isr), avg_gross_margin=mean(gm))
 end
 
 
@@ -408,7 +408,7 @@ used by `estimate_params_ii_full`:
 
 Monthly moments (computed from raw simulation output):
 - `avg_isr`          — mean of BOM-inventory / revenue
-- `var_isr`          — variance of BOM-inventory / revenue
+- `var_log1p_isr`    — variance of `log(1 +` BOM-inventory / revenue `)`
 - `avg_gross_margin` — mean of p/c
 
 Annual auxiliary statistics (from `compute_annual_auxiliary`):
@@ -428,11 +428,11 @@ function _simulate_all_moments(params::Parameters, ppi, opi,
     # Monthly moments
     # isr_sim[t] = c·s_t/(p_t·D_t)  →  BOM/revenue ISR = s_t/(p_t·D_t) = isr_sim[t]/c
     # gross margin = p/c = s_t / (isr_sim[t]·D_t)   (requires D_t > 0)
-    valid_mo = (isr_sim .> 0) .& (dem_sim .> 0) .& isfinite.(isr_sim)
+    valid_mo = dem_sim .> 0
     isr_mo   = isr_sim[valid_mo] ./ params.c
     gm_mo    = inv_sim[valid_mo] ./ (isr_sim[valid_mo] .* dem_sim[valid_mo])
     avg_isr_sim = mean(isr_mo)
-    var_isr_sim = var(isr_mo)
+    var_log1p_isr_sim = var(log1p.(isr_mo))
     avg_gm_sim  = mean(gm_mo)
 
     # Annual aggregation for auxiliary regression
@@ -460,7 +460,7 @@ function _simulate_all_moments(params::Parameters, ppi, opi,
                        total_opex=tot_opex, total_sales=tot_sales)
     ψ̃_ann = compute_annual_auxiliary(df_ann)
 
-    return (avg_isr=avg_isr_sim, var_isr=var_isr_sim, avg_gross_margin=avg_gm_sim,
+    return (avg_isr=avg_isr_sim, var_log1p_isr=var_log1p_isr_sim, avg_gross_margin=avg_gm_sim,
             γ̂_OLS=ψ̃_ann.γ̂_OLS, ρ̂_ω=ψ̃_ann.ρ̂_ω, σ̂_η2=ψ̃_ann.σ̂_η2, μ̂_η=ψ̃_ann.μ̂_η)
 end
 
@@ -481,7 +481,7 @@ Indirect inference estimator for all seven estimable structural parameters:
 | δ         | inventory depreciation rate        | monthly ISR variance|
 
 **Data moments** (7 total):
-- Monthly: avg BOM-inventory/revenue ISR, variance of ISR, avg gross margin (p/c)
+- Monthly: avg BOM-inventory/revenue ISR, variance of log(1 + ISR), avg gross margin (p/c)
 - Annual: γ̂_OLS, ρ̂_ω, σ̂²_η, μ̂_ω  from the OLS auxiliary regression
 
 **Objective** — normalised SSE:
@@ -517,14 +517,14 @@ function estimate_params_ii_full(params_base::Parameters,
     # --- Data moments ---
     mo_data  = compute_monthly_moments(df_monthly)
     ann_data = compute_annual_auxiliary(df_annual)
-    m̂ = [mo_data.avg_isr, mo_data.var_isr, mo_data.avg_gross_margin,
+    m̂ = [mo_data.avg_isr, mo_data.var_log1p_isr, mo_data.avg_gross_margin,
           ann_data.γ̂_OLS, ann_data.ρ̂_ω, ann_data.σ̂_η2, ann_data.μ̂_η]
     w = [1.0 / max(abs(v), 1e-8)^2 for v in m̂]
 
     if verbose
         println("\n=== Full II Estimation — Data Moments ===")
         @printf("  avg_isr          = %10.6f\n", m̂[1])
-        @printf("  var_isr          = %10.6f\n", m̂[2])
+        @printf("  var_log1p_isr    = %10.6f\n", m̂[2])
         @printf("  avg_gross_margin = %10.6f\n", m̂[3])
         @printf("  γ̂_OLS (annual)   = %10.6f\n", m̂[4])
         @printf("  ρ̂_ω  (annual)    = %10.6f\n", m̂[5])
@@ -560,7 +560,7 @@ function estimate_params_ii_full(params_base::Parameters,
                                       size=params_base.size)
             _, _, _, _, ppi, opi, _ = solve_model(params_iter)
             m̃_nt = _simulate_all_moments(params_iter, ppi, opi, n_firms, n_years, seed)
-            m̃ = [m̃_nt.avg_isr, m̃_nt.var_isr, m̃_nt.avg_gross_margin,
+            m̃ = [m̃_nt.avg_isr, m̃_nt.var_log1p_isr, m̃_nt.avg_gross_margin,
                   m̃_nt.γ̂_OLS,  m̃_nt.ρ̂_ω,   m̃_nt.σ̂_η2, m̃_nt.μ̂_η]
             sse = sum(w[k] * (m̂[k] - m̃[k])^2 for k in 1:7)
 
@@ -639,7 +639,7 @@ Start Julia with `julia --threads=N` (or set the environment variable
 
 # Returns
 A `DataFrame` with parameter columns `γ, μη, ση2, ρω, σν, ϵ, δ` and moment
-columns `avg_isr, var_isr, avg_gross_margin, γ̂_OLS, ρ̂_ω, σ̂_η2, μ̂_η, failed`.
+columns `avg_isr, var_log1p_isr, avg_gross_margin, γ̂_OLS, ρ̂_ω, σ̂_η2, μ̂_η, failed`.
 `failed = true` indicates the model could not be solved at those parameters.
 """
 function compute_moments_on_grid(params_base::Parameters,
@@ -677,7 +677,7 @@ function compute_moments_on_grid(params_base::Parameters,
     out_δ    = Vector{Float64}(undef, n_total)
 
     out_avg_isr  = fill(NaN, n_total)
-    out_var_isr  = fill(NaN, n_total)
+    out_var_log1p_isr = fill(NaN, n_total)
     out_avg_gm   = fill(NaN, n_total)
     out_γ_ols    = fill(NaN, n_total)
     out_ρω_ar1   = fill(NaN, n_total)
@@ -724,7 +724,7 @@ function compute_moments_on_grid(params_base::Parameters,
             m̃ = _simulate_all_moments(params_i, ppi, opi, n_firms, n_years, seed)
 
             out_avg_isr[idx]  = m̃.avg_isr
-            out_var_isr[idx]  = m̃.var_isr
+            out_var_log1p_isr[idx]  = m̃.var_log1p_isr
             out_avg_gm[idx]   = m̃.avg_gross_margin
             out_γ_ols[idx]    = m̃.γ̂_OLS
             out_ρω_ar1[idx]   = m̃.ρ̂_ω
@@ -763,7 +763,7 @@ function compute_moments_on_grid(params_base::Parameters,
         ϵ                = out_ϵ,
         δ                = out_δ,
         avg_isr          = out_avg_isr,
-        var_isr          = out_var_isr,
+        var_log1p_isr    = out_var_log1p_isr,
         avg_gross_margin = out_avg_gm,
         γ_OLS            = out_γ_ols,
         ρ_ω              = out_ρω_ar1,

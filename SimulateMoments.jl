@@ -7,10 +7,10 @@ include("EstimationFunctions.jl")
 params_base = Parameters(
     c=1.0,
     fc=0.0,
-    μη=log(0.1),
+    μη=log(0.01),
     ση2=0.05,
     ρ_ω=0.1,
-    γ=0.9,
+    γ=0.6,
     δ=0.05,
     β=0.95,
     ϵ=8.0,
@@ -23,11 +23,9 @@ params_base = Parameters(
 )
 
 # Build ~100 points near the baseline by varying only (ϵ, σν2, δ).
-ϵ_vals   = collect(range(params_base.ϵ - 1.0,  params_base.ϵ + 1.0,  length=5))
-σν2_vals = collect(range(params_base.σν2 - 0.03, params_base.σν2 + 0.03, length=5))
-δ_vals   = collect(range(max(0.001, params_base.δ - 0.02),
-                         min(0.999, params_base.δ + 0.02),
-                         length=4))
+ϵ_vals   = collect(range(4,  16,  length=5))
+σν2_vals = collect(range(0.25, 0.5, length=5))
+δ_vals   = collect(range(0.025,.2,length=4))
 
 param_vectors = Vector{Vector{Float64}}()
 sizehint!(param_vectors, length(ϵ_vals) * length(σν2_vals) * length(δ_vals))
@@ -62,3 +60,31 @@ df_out = compute_moments_on_grid(
 n_ok = sum(.!df_out.failed)
 println("Sweep complete. $(n_ok) / $(nrow(df_out)) points succeeded.")
 println("Saved: SimulatedData/moments_example_100.csv")
+
+# Summary output
+fail_fraction = sum(df_out.failed) / nrow(df_out)
+@printf("Failure fraction: %.4f (%d / %d)\n", fail_fraction, sum(df_out.failed), nrow(df_out))
+
+df_success = df_out[.!df_out.failed, :]
+if nrow(df_success) == 0
+    println("No successful simulations; moment summaries unavailable.")
+else
+    println("\nMoment summaries (successful simulations only):")
+    println("moment, p25, median, mean, p75")
+
+    moment_cols = [:avg_isr, :var_log1p_isr, :avg_gross_margin, :γ_OLS, :ρ_ω, :σ_η2, :μ_η]
+    for col in moment_cols
+        vals = collect(skipmissing(df_success[!, col]))
+        vals = vals[isfinite.(vals)]
+        if isempty(vals)
+            @printf("%s, NaN, NaN, NaN, NaN\n", String(col))
+        else
+            @printf("%s, %.6f, %.6f, %.6f, %.6f\n",
+                    String(col),
+                    quantile(vals, 0.25),
+                    quantile(vals, 0.50),
+                    mean(vals),
+                    quantile(vals, 0.75))
+        end
+    end
+end
