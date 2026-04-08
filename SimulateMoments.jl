@@ -23,10 +23,10 @@ params_base = Parameters(
 )
 
 # Build ~100 points near the baseline by varying only (ϵ, σν2, δ).
-ϵ_vals   = collect(range(4,  16,  length=5))
-σν2_vals = collect(range(0.03, 0.15, length=5))
-δ_vals   = collect(range(0.025,.2,length=5))
-μη_vals   = collect(range(log(0.01),log(0.5),length=5))
+ϵ_vals   = collect(range(4,  16,  length=4))
+σν2_vals = collect(range(0.09, 0.21, length=5))
+δ_vals   = collect(range(0.005,.025,length=5))
+μη_vals   = collect(range(log(0.001),log(0.05),length=5))
 
 param_vectors = Vector{Vector{Float64}}()
 sizehint!(param_vectors, length(ϵ_vals) * length(σν2_vals) * length(δ_vals))

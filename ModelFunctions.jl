@@ -881,13 +881,14 @@ function compute_firm_statistics(N::Int, T::Int, price_policy_interp, order_poli
     end
 
     avg_sales = mean(all_sales)
-    valid_ratio = all_ratio[isfinite.(all_ratio)]
+    valid_obs = all_sales .> 0
+    valid_ratio = all_ratio[valid_obs]
     inv_to_sales_ratio_avg = mean(valid_ratio)
-    inv_to_sales_ratio_var = var(valid_ratio)
-    inv_to_sales_log_ratio_var = var(log.(1.0 .+ valid_ratio))
+    inv_to_sales_ratio_var = var(log.(1.0 .+ valid_ratio))
+    inv_to_sales_log_ratio_var = inv_to_sales_ratio_var
     
     corr_markup_inv = cor(all_inventories, all_markups)
-    corr_markup_inv_ratio = cor(all_ratio[all_inventories .> 0], all_markups[all_inventories .> 0])
+    corr_markup_inv_ratio = cor(all_ratio[valid_obs], all_markups[valid_obs])
     
     return (
         avg_inventory = mean(all_inventories),

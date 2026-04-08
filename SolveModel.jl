@@ -2,7 +2,7 @@ using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Plots, Interpola
 include("ModelFunctions.jl")
 include("EstimationFunctions.jl")
 
-params = Parameters(c=1.0, fc=0.0, μη=log(0.1),ση2=0.05,ρ_ω=0.1, γ=0.9,δ=0.05, β=0.95, ϵ=8.0, μν=1, σν2=0.09, Smax=20, Ns=200,scale=1.0,size=100)
+params = Parameters(c=1.0, fc=0.0, μη=log(0.01),ση2=0.05,ρ_ω=0.1, γ=0.9,δ=0.01, β=0.95, ϵ=8.0, μν=1, σν2=0.15, Smax=20, Ns=200,scale=1.0,size=100)
 
 
 # # ---------------------------------------------------
