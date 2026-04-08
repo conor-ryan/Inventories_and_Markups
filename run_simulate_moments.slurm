@@ -19,4 +19,20 @@ module load julia
 
 JULIA_BIN=${JULIA_BIN:-julia}
 THREADS=${SLURM_CPUS_PER_TASK:-1}
-${JULIA_BIN} --threads=${THREADS} Code/SimulateMoments.jl
+
+echo "SLURM job id: ${SLURM_JOB_ID:-unknown}"
+echo "Requested CPUs: ${SLURM_CPUS_PER_TASK:-unknown}"
+echo "Requested memory: ${SLURM_MEM_PER_NODE:-unknown} MB per node"
+
+echo "Memory snapshot before run:"
+free -h || true
+
+if [[ -x /usr/bin/time ]]; then
+	/usr/bin/time -v ${JULIA_BIN} --threads=${THREADS} Code/SimulateMoments.jl
+else
+	echo "/usr/bin/time not found; running without process-level peak RSS report."
+	${JULIA_BIN} --threads=${THREADS} Code/SimulateMoments.jl
+fi
+
+echo "Memory snapshot after run:"
+free -h || true

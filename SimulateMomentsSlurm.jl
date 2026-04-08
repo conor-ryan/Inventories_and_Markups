@@ -7,7 +7,7 @@ include("EstimationFunctions.jl")
 params_base = Parameters(
     c=1.0,
     fc=0.0,
-    μη=log(0.01),
+    μη=log(0.05),
     ση2=0.05,
     ρ_ω=0.1,
     γ=0.6,

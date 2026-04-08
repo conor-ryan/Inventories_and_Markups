@@ -24,7 +24,7 @@ params_base = Parameters(
 
 # Build ~100 points near the baseline by varying only (ϵ, σν2, δ).
 ϵ_vals   = collect(range(4,  16,  length=5))
-σν2_vals = collect(range(0.25, 0.5, length=5))
+σν2_vals = collect(range(0.03, 0.15, length=5))
 δ_vals   = collect(range(0.025,.2,length=5))
 μη_vals   = collect(range(log(0.01),log(0.5),length=5))
 

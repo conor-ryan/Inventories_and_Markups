@@ -688,7 +688,7 @@ function compute_moments_on_grid(params_base::Parameters,
     # --- Progress tracking --------------------------------------------------
     counter    = Threads.Atomic{Int}(0)
     print_lock = ReentrantLock()
-    report_step = max(1, n_total ÷ 40)   # print at ~2.5 % increments
+    report_step = max(20, n_total ÷ 10)   # print at ~10 % increments
     t_start     = time()
 
     # --- Main parallel loop -------------------------------------------------
