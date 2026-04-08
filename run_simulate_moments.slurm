@@ -11,10 +11,8 @@
 set -euo pipefail
 
 # Run from the directory containing this script.
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-cd "${SCRIPT_DIR}"
+cd ~/work/Research/CRW_Inventory_Competition/Code/
 
-mkdir -p "${SCRIPT_DIR}/logs"
 
 # If your cluster uses environment modules, uncomment and adjust:
 module load julia
@@ -22,9 +20,9 @@ module load julia
 JULIA_BIN=${JULIA_BIN:-julia}
 THREADS=${SLURM_CPUS_PER_TASK:-1}
 
-if [[ -f "${SCRIPT_DIR}/Project.toml" ]]; then
-  ${JULIA_BIN} --project="${SCRIPT_DIR}" --threads=${THREADS} -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
-  ${JULIA_BIN} --project="${SCRIPT_DIR}" --threads=${THREADS} SimulateMoments.jl
+if [[ -f ~/work/Research/CRW_Inventory_Competition/Code/Project.toml ]]; then
+  ${JULIA_BIN} --project=~/work/Research/CRW_Inventory_Competition/Code --threads=${THREADS} -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
+  ${JULIA_BIN} --project=~/work/Research/CRW_Inventory_Competition/Code --threads=${THREADS} SimulateMoments.jl
 else
   echo "Project.toml not found in Code. Running without --project." >&2
   ${JULIA_BIN} --threads=${THREADS} SimulateMoments.jl
