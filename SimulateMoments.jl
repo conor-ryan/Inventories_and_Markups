@@ -7,7 +7,7 @@ include("EstimationFunctions.jl")
 params_base = Parameters(
     c=1.0,
     fc=0.0,
-    μη=log(0.01),
+    μη=log(0.05),
     ση2=0.05,
     ρ_ω=0.1,
     γ=0.6,
@@ -25,7 +25,8 @@ params_base = Parameters(
 # Build ~100 points near the baseline by varying only (ϵ, σν2, δ).
 ϵ_vals   = collect(range(4,  16,  length=5))
 σν2_vals = collect(range(0.25, 0.5, length=5))
-δ_vals   = collect(range(0.025,.2,length=4))
+δ_vals   = collect(range(0.025,.2,length=5))
+μη_vals   = collect(range(log(0.01),log(0.5),length=5))
 
 param_vectors = Vector{Vector{Float64}}()
 sizehint!(param_vectors, length(ϵ_vals) * length(σν2_vals) * length(δ_vals))
@@ -33,15 +34,16 @@ sizehint!(param_vectors, length(ϵ_vals) * length(σν2_vals) * length(δ_vals))
 for ϵ_i in ϵ_vals
     for σν2_i in σν2_vals
         for δ_i in δ_vals
-            push!(param_vectors, [
-                params_base.γ,
-                params_base.μη,
-                params_base.ση2,
-                params_base.ρ_ω,
-                σν2_i,
-                ϵ_i,
-                δ_i
-            ])
+            for μη_i in μη_vals 
+                push!(param_vectors, [
+                    params_base.γ,
+                    μη_i,
+                    params_base.ση2,
+                    params_base.ρ_ω,
+                    σν2_i,
+                    ϵ_i,
+                    δ_i
+                ])
         end
     end
 end
