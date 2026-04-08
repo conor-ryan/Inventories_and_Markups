@@ -44,6 +44,7 @@ for ϵ_i in ϵ_vals
                     ϵ_i,
                     δ_i
                 ])
+            end
         end
     end
 end

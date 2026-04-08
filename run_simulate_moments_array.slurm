@@ -14,7 +14,6 @@ set -euo pipefail
 # Hard-coded project directory on cluster.
 cd ~/work/Research/CRW_Inventory_Competition/Code/
 mkdir -p logs
-
 module load julia
 
 JULIA_BIN=${JULIA_BIN:-julia}
