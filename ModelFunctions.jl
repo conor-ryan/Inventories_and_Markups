@@ -24,6 +24,8 @@ struct Parameters
     quad_nodes::Vector{Float64}
     quad_weights::Vector{Float64}
     quad_nodes_lognormal::Vector{Float64}
+    gl_nodes::Vector{Float64}     # Gauss-Legendre nodes on [-1, 1]
+    gl_weights::Vector{Float64}   # Gauss-Legendre weights
     Smax::Float64
     Ns::Int64
     Sgrid::Vector{Float64}
@@ -31,6 +33,7 @@ struct Parameters
 
     function Parameters(; c=1.0, fc=0.0, μη=0.0, ση2=0.0, ρ_ω=0.9, γ=1.0, δ=0.2, β=0.95, ϵ=2.0, μν=100, σν2=2832, Q=19, Q_ω=7, scale=1.0, size=1.0, Smax=50.0, Ns=800)
         x, w = gausshermite(Q)
+        gl_x, gl_w = gausslegendre(Q)
 
         scale_parameter = scale^(ϵ)
         c = c * scale
@@ -95,7 +98,7 @@ struct Parameters
         σν2 = σν2 / (scale_parameter^2 * size^2)
 
         new(c, fc, μη, ση2, ρ_ω, length(ω_grid_vec), ω_grid_vec, P_ω_mat, π_ω_vec,
-            γ, δ, β, ϵ, μν, σν2, LogNormal(μ, σ), Q, x, w, x_lognormal, Smax, Ns, Sgrid_vec,size)
+            γ, δ, β, ϵ, μν, σν2, LogNormal(μ, σ), Q, x, w, x_lognormal, gl_x, gl_w, Smax, Ns, Sgrid_vec,size)
     end
 end
 
@@ -204,6 +207,54 @@ end
 
 
 """
+    truncated_lognormal_ratio_Eνγ_Eν(νbar, params)
+
+Compute the ratio E[ν^γ | ν < νbar] / E[ν | ν < νbar] for ν ~ LogNormal(μ, σ)
+using Gauss-Legendre quadrature adapted to the truncated support.
+
+The key idea is the probability-integral transform: let u = F(ν), so ν = F^{-1}(u).
+The truncation ν < νbar maps to u ∈ [0, Fbar].  Gauss-Legendre nodes on [-1, 1]
+are rescaled to [0, Fbar], giving integration points that respond continuously to
+changes in νbar (unlike fixed Gauss-Hermite nodes with an indicator).
+
+The GL change of variables u = (Fbar/2)(t + 1) introduces a Jacobian of Fbar/2.
+This cancels in the ratio but must be retained for the individual expectations:
+
+    E[ν^γ | ν < νbar] = (1/2) Σ_q w_q ν_q^γ
+    E[ν   | ν < νbar] = (1/2) Σ_q w_q ν_q
+    ratio              = (Σ_q w_q ν_q^γ) / (Σ_q w_q ν_q)
+
+where ν_q = exp(μ + σ * Φ^{-1}((Fbar/2) * (gl_node_q + 1))).
+
+Returns a NamedTuple (ratio, Eνγ, Eν).
+"""
+function truncated_lognormal_ratio_Eνγ_Eν(νbar::Float64, params::Parameters)
+    μ_log = params.dist.μ
+    σ_log = params.dist.σ
+    Fbar  = cdf(params.dist, νbar)
+
+    if Fbar < 1e-10
+        return (ratio=0.0, Eνγ=0.0, Eν=0.0)
+    end
+
+    half_Fbar = 0.5 * Fbar
+    num = 0.0
+    den = 0.0
+    for q in 1:params.Q
+        # Map GL node from [-1,1] to (0, Fbar)
+        u_q = half_Fbar * (params.gl_nodes[q] + 1.0)
+        ν_q = exp(μ_log + σ_log * quantile(Normal(), u_q))
+        w_q = params.gl_weights[q]
+        num += w_q * ν_q^params.γ
+        den += w_q * ν_q
+    end
+
+    ratio = den > 0.0 ? num / den : 0.0
+    return (ratio=ratio, Eνγ=0.5 * num, Eν=0.5 * den)
+end
+
+
+"""
     price_residual(p, s, params)
 
 Compute pricing residual matching SolveModel.jl
@@ -221,7 +272,9 @@ function price_residual(p, s, c_tilde, ω, params)
 
     Eν = truncated_lognormal_mean(νbar, params)
 
-    opp_mc = ω * params.γ*p^(params.ϵ*(1-params.γ))
+    ratio_Eνγ = truncated_lognormal_ratio_Eνγ_Eν(νbar, params).ratio
+
+    opp_mc = ω * params.γ * ratio_Eνγ * p^(params.ϵ*(1-params.γ))
     rhs = (params.ϵ / (params.ϵ - 1)) *(opp_mc +  c_tilde) +
           (1 / (params.ϵ - 1)) *
           s * p^(params.ϵ + 1) *
