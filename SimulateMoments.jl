@@ -13,37 +13,27 @@ params = Parameters(c=1.0, fc=0.0, μη=log(0.01),ση2=0.05,ρ_ω=0.1, γ=0.9,�
 σν2_vals = collect(range(0.09, 0.21, length=4))
 δ_vals   = collect(range(0.005,.025,length=4))
 μη_vals   = collect(range(log(0.001),log(0.05),length=4))
+γ_vals   = collect(range(0.5,0.9,length=4))
+ση2_vals   = collect(range(0.025,0.15,length=4))
+ρ_vals   = collect(range(0.1,0.9,length=4))
+
 
 param_vectors = Vector{Vector{Float64}}()
 sizehint!(param_vectors, length(ϵ_vals) * length(σν2_vals) * length(δ_vals))
 
-for ϵ_i in ϵ_vals
-    for σν2_i in σν2_vals
-        for δ_i in δ_vals
-            for μη_i in μη_vals 
-                push!(param_vectors, [
-                    params.γ,
-                    μη_i,
-                    params.ση2,
-                    params.ρ_ω,
-                    σν2_i,
-                    ϵ_i,
-                    δ_i
-                ])
-            end
-        end
-    end
+for ϵ_i in ϵ_vals, σν2_i in σν2_vals, δ_i in δ_vals, μη_i in μη_vals, γ_i in γ_vals , ση2_i in ση2_vals,  ρ_i in ρ_vals  
+    push!(param_vectors, [
+        γ_i,
+        μη_i,
+        ση2_i,
+        ρ_i,
+        σν2_i,
+        ϵ_i,
+        δ_i
+    ])
 end
 
-# param_vectors = [[
-#                     params.γ,
-#                     params.μη,
-#                     params.ση2,
-#                     params.ρ_ω,
-#                     params.σν2,
-#                     params.ϵ,
-#                     params.δ
-#                 ]]
+# param_vectors = param_vectors[1:20]
 
 println("Running parameter sweep with $(length(param_vectors)) points...")
 

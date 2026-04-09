@@ -44,7 +44,7 @@ function estimate_gamma_bc(params::Parameters, df::DataFrame;
                                   μν=μ_ν_level, σν2=σ_ν2_level,
                                   Smax=params.Smax, Ns=params.Ns,
                                   size=params.size)
-        _, _, _, _, ppi_iter, opi_iter, _ = solve_model(params_iter)
+        _, _, _, _, ppi_iter, opi_iter, _, _ = solve_model(params_iter)
         Random.seed!(seed)
         _, _, dem_i, _, exp_i, ω_i, isr_i =
             simulate_firm(n_firms, n_periods, ppi_iter, opi_iter, params_iter)
@@ -329,7 +329,7 @@ function estimate_params_ii_annual(params_base::Parameters, df_annual::DataFrame
                                       μν=μ_ν_level, σν2=σ_ν2_level,
                                       Smax=params_base.Smax, Ns=params_base.Ns,
                                       size=params_base.size)
-            _, _, _, _, ppi, opi, _ = solve_model(params_iter)
+            _, _, _, _, ppi, opi, _, _ = solve_model(params_iter)
             df_sim = _simulate_and_get_annual(params_iter, ppi, opi, n_firms, n_years, seed)
             ψ̃ = compute_annual_auxiliary(df_sim)
             ψ̃_vec = [ψ̃.γ̂_OLS, ψ̃.ρ̂_ω, ψ̃.σ̂_η2, ψ̃.μ̂_η]
@@ -558,7 +558,7 @@ function estimate_params_ii_full(params_base::Parameters,
                                       μν=params_base.μν, σν2=σν2_n,
                                       Smax=params_base.Smax, Ns=params_base.Ns,
                                       size=params_base.size)
-            _, _, _, _, ppi, opi, _ = solve_model(params_iter)
+            _, _, _, _, ppi, opi, _, _ = solve_model(params_iter)
             m̃_nt = _simulate_all_moments(params_iter, ppi, opi, n_firms, n_years, seed)
             m̃ = [m̃_nt.avg_isr, m̃_nt.var_log1p_isr, m̃_nt.avg_gross_margin,
                   m̃_nt.γ̂_OLS,  m̃_nt.ρ̂_ω,   m̃_nt.σ̂_η2, m̃_nt.μ̂_η]
@@ -647,6 +647,7 @@ function compute_moments_on_grid(params_base::Parameters,
                                   n_firms::Int              = 200,
                                   n_years::Int              = 20,
                                   seed::Int                 = 212311,
+                                  max_value_iterations::Int = 500,
                                   output_path::String       = "grid_moments.csv")
 
     # --- Validate and convert user-supplied parameter vectors ---------------
@@ -720,7 +721,8 @@ function compute_moments_on_grid(params_base::Parameters,
                 Ns   = params_base.Ns,
                 size = params_base.size)
 
-            _, _, _, _, ppi, opi, _ = solve_model(params_i)
+            _, _, _, _, ppi, opi, _, converged_i = solve_model(params_i,maxiter=max_value_iterations)
+            !converged_i && error("value function did not converge")
             m̃ = _simulate_all_moments(params_i, ppi, opi, n_firms, n_years, seed)
 
             out_avg_isr[idx]  = m̃.avg_isr

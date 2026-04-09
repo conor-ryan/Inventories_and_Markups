@@ -33,7 +33,7 @@ Ns = params.Ns
 
 
 println("Solving value function...")
-p_policy, order_policy, V, V_by_omega, price_policy_interp, order_policy_interp, Vinterp = solve_model(params);
+p_policy, order_policy, V, V_by_omega, price_policy_interp, order_policy_interp, Vinterp, converged = solve_model(params);
 
 # p_policy_full, order_policy_full, V_full, V_by_omega_full, price_policy_interp, order_policy_interp, Vinterp = solve_model(params,full=true);
 

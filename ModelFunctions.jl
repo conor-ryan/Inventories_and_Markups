@@ -404,7 +404,8 @@ function solve_value_function(params; tol=1e-4, maxiter=1000, full=false, fast_i
 
     # Ex-ante value: average over ergodic ω distribution
     V = V_by_omega * params.π_ω
-    return V, n_policy_current, p_policy_current, V_by_omega
+    converged = diff <= tol
+    return V, n_policy_current, p_policy_current, V_by_omega, converged
 end
 
 
@@ -923,7 +924,7 @@ end
 Solve the complete model: price policy, value function, and order policy.
 Returns (p_policy, order_policy, V, price_policy_interp, order_policy_interp, Vinterp)
 """
-function solve_model(params; full=false, verbose=false,fast_interp=true)
+function solve_model(params; full=false, verbose=false,fast_interp=true,maxiter=1000)
     Sgrid  = params.Sgrid
     ω_grid = params.ω_grid
     Nω     = params.Q_ω
@@ -931,7 +932,7 @@ function solve_model(params; full=false, verbose=false,fast_interp=true)
     if verbose
         println("Solving value function...")
     end
-    V, order_policy, p_policy, V_by_omega = solve_value_function(params, full=full,fast_interp=fast_interp)
+    V, order_policy, p_policy, V_by_omega, converged = solve_value_function(params, full=full,fast_interp=fast_interp,maxiter=maxiter)
 
     # Build s-interpolation at each omega grid point; use nearest-grid-point lookup in omega.
     price_policy_interp_nodes = [LinearInterpolation(Sgrid, p_policy[:, j], extrapolation_bc=Line()) for j in 1:Nω]
@@ -949,7 +950,7 @@ function solve_model(params; full=false, verbose=false,fast_interp=true)
 
     Vinterp = LinearInterpolation(Sgrid, V, extrapolation_bc=Line())
 
-    return p_policy, order_policy, V, V_by_omega, price_policy_interp, order_policy_interp, Vinterp
+    return p_policy, order_policy, V, V_by_omega, price_policy_interp, order_policy_interp, Vinterp, converged
 end
 
 
