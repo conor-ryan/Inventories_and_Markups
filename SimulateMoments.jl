@@ -12,10 +12,10 @@ params = Parameters(c=1.0, fc=0.0, μη=log(0.01),ση2=0.05,ρ_ω=0.1, γ=0.9,�
 ϵ_bounds   = (4.0, 16.0)
 σν2_bounds = (0.09, 0.21)
 δ_bounds   = (0.005, 0.025)
-μη_bounds  = (log(0.01), log(0.1))
+μη_bounds  = (log(0.001), log(0.1))
 γ_bounds   = (0.7, 1.1)
 ση2_bounds = (0.025, 0.15)
-ρ_bounds   = (0.1, 0.5)
+ρ_bounds   = (0.0, 0.5)
 
 n_param_points = 5000
 param_bounds = [

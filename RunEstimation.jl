@@ -9,12 +9,9 @@ include("SimulateData.jl")
 # Main: solve model, simulate panel, save to CSV
 # ---------------------------------------------------
 
-params = Parameters(c=1.0, fc=0.0, μη=log(0.1), ση2=0.05, ρ_ω=0.1, γ=0.9,
-                    δ=0.05, β=0.95, ϵ=6.0, μν=1, σν2=0.09,
+params = Parameters(c=1.0, fc=0.0, μη=log(0.05), ση2=0.05, ρ_ω=0.2, γ=0.9,
+                    δ=0.01, β=0.95, ϵ=6.0, μν=1, σν2=0.09,
                     Smax=30, Ns=200, scale=1.0, size=100)
-
-println("Solving model...")
-println("Model solve will run inside simulate_panel_data.")
 
 println("Simulating panel data (N=1000, M=60, burn_in=100)...")
 df_monthly, df_annual = simulate_panel_data(params;
@@ -40,15 +37,26 @@ println("Annual data written to  $annual_path")
 # ---------------------------------------------------
 
 println("\n=== Monthly Data Moments ===")
-mo_moments = compute_monthly_moments(df_monthly)
-@printf("avg_isr          = %10.6f\n", mo_moments.avg_isr)
-@printf("var_log1p_isr    = %10.6f\n", mo_moments.var_log1p_isr)
-@printf("avg_gross_margin = %10.6f\n", mo_moments.avg_gross_margin)
+target_moments = compute_full_ii_target_moments(df_monthly, df_annual)
+@printf("avg_isr          = %10.6f\n", target_moments.avg_isr)
+@printf("var_log1p_isr    = %10.6f\n", target_moments.var_log1p_isr)
+@printf("avg_gross_margin = %10.6f\n", target_moments.avg_gross_margin)
+
+println("\n=== Selecting Initial Guess from Precomputed Moments Grid ===")
+df_grid = CSV.read(joinpath(out_dir, "moments.csv"), DataFrame)
+start_guess = select_best_grid_start(df_grid, target_moments)
+@printf("Best grid objective=%.6f | Start params: γ=%.6f, μη=%.6f, ση2=%.6f, ρω=%.6f, σν2=%.6f, ϵ=%.6f, δ=%.6f\n",
+        start_guess.obj_value,
+        start_guess.γ, start_guess.μη, start_guess.ση2, start_guess.ρω,
+        start_guess.σν2, start_guess.ϵ, start_guess.δ)
 
 println("\n=== Estimating all 7 parameters via Full Indirect Inference ===")
-ii_full = estimate_params_ii_full(params, df_monthly, df_annual;
+ii_full = estimate_params_ii_full(params, target_moments;
                                   n_firms  = 100,
                                   n_years  = 25,
+                                  init_guess = [start_guess.γ, start_guess.μη, start_guess.ση2,
+                                                start_guess.ρω, start_guess.σν2, start_guess.ϵ,
+                                                start_guess.δ],
                                   max_iter = 500,
                                   seed     = 212311,
                                   verbose  = true)

@@ -229,7 +229,7 @@ Compute four auxiliary statistics from an annual balanced panel:
 `df_annual` must have columns: `firm_id`, `year_id`, `total_opex`,
 `total_sales`, `inv_to_sales`.
 
-Returns a NamedTuple `(γ̂_OLS, ρ̂_ω, σ̂_η2, μ̂_ω)`.
+Returns a NamedTuple `(γ_OLS, ρ_ω, σ_η2, μ_η)`.
 """
 function compute_annual_auxiliary(df_annual::DataFrame)
     df = sort(df_annual, [:firm_id, :year_id])
@@ -251,12 +251,12 @@ function compute_annual_auxiliary(df_annual::DataFrame)
     )
 
     ols_result  = lm(@formula(log_opex ~ log_sales), df_ols)
-    γ̂_OLS       = coef(ols_result)[end]
+    γ_OLS       = coef(ols_result)[end]
     log_ω_proxy = coef(ols_result)[1] .+ residuals(ols_result)
-    μ̂_η, σ̂_η2, ρ̂_ω, se_μη, se_ση2, se_ρω =
+    μ_η, σ_η2, ρ_ω, se_μη, se_ση2, se_ρω =
         estimate_omega_ar1(log_ω_proxy, df_ols.firm_boundary)
 
-    return (γ̂_OLS=γ̂_OLS, ρ̂_ω=ρ̂_ω, σ̂_η2=σ̂_η2, μ̂_η=μ̂_η,
+    return (γ_OLS=γ_OLS, ρ_ω=ρ_ω, σ_η2=σ_η2, μ_η=μ_η,
             se_ρω=se_ρω, se_ση2=se_ση2, se_μη=se_μη,
             ols_result=ols_result)
 end
@@ -363,16 +363,16 @@ function estimate_params_ii_annual(params_base::Parameters, df_annual::DataFrame
 
     # --- Step 0: auxiliary statistics from the data ---
     ψ̂ = compute_annual_auxiliary(df_annual)
-    ψ̂_vec = [ψ̂.γ̂_OLS, ψ̂.ρ̂_ω, ψ̂.σ̂_η2, ψ̂.μ̂_η]   # se_* not used in objective
+    ψ̂_vec = [ψ̂.γ_OLS, ψ̂.ρ_ω, ψ̂.σ_η2, ψ̂.μ_η]   # se_* not used in objective
     # Normalisation: weight inversely proportional to |ψ̂_k|²
     w_vec = [1.0 / max(abs(v), 1e-8)^2 for v in ψ̂_vec]
 
     if verbose
         println("\n=== Indirect Inference: Annual Data Auxiliary Statistics ===")
-        @printf("  γ̂_OLS = %10.6f\n",  ψ̂.γ̂_OLS)
-        @printf("  ρ̂_ω   = %10.6f  (annual)\n", ψ̂.ρ̂_ω)
-        @printf("  σ̂²_η  = %10.6f  (annual)\n", ψ̂.σ̂_η2)
-        @printf("  μ̂_η   = %10.6f  (AR(1) intercept)\n",  ψ̂.μ̂_η)
+        @printf("  γ_OLS = %10.6f\n",  ψ̂.γ_OLS)
+        @printf("  ρ_ω   = %10.6f  (annual)\n", ψ̂.ρ_ω)
+        @printf("  σ_η2  = %10.6f  (annual)\n", ψ̂.σ_η2)
+        @printf("  μ_η   = %10.6f  (AR(1) intercept)\n",  ψ̂.μ_η)
         println("\nStarting Nelder-Mead over (γ, μη, log σ²η, arctanh ρω)...")
         println("\n iter │      γ      │    μη_mo    │   σ²η_mo    │   ρω_mo    │  obj")
         println("──────┼─────────────┼─────────────┼─────────────┼────────────┼─────────────")
@@ -404,7 +404,7 @@ function estimate_params_ii_annual(params_base::Parameters, df_annual::DataFrame
             _, _, _, _, ppi, opi, _, _ = solve_model(params_iter)
             df_sim = _simulate_and_get_annual(params_iter, ppi, opi, n_firms, n_years, seed)
             ψ̃ = compute_annual_auxiliary(df_sim)
-            ψ̃_vec = [ψ̃.γ̂_OLS, ψ̃.ρ̂_ω, ψ̃.σ̂_η2, ψ̃.μ̂_η]
+            ψ̃_vec = [ψ̃.γ_OLS, ψ̃.ρ_ω, ψ̃.σ_η2, ψ̃.μ_η]
             sse = sum(w_vec[k] * (ψ̂_vec[k] - ψ̃_vec[k])^2 for k in 1:4)
 
             if verbose
@@ -532,13 +532,97 @@ function _simulate_all_moments(params::Parameters, ppi, opi,
                        total_opex=tot_opex, total_sales=tot_sales)
     ψ̃_ann = compute_annual_auxiliary(df_ann)
 
-    return (avg_isr=avg_isr_sim, var_log1p_isr=var_log1p_isr_sim, avg_gross_margin=avg_gm_sim,
-            γ̂_OLS=ψ̃_ann.γ̂_OLS, ρ̂_ω=ψ̃_ann.ρ̂_ω, σ̂_η2=ψ̃_ann.σ̂_η2, μ̂_η=ψ̃_ann.μ̂_η)
+            return (avg_isr=avg_isr_sim, var_log1p_isr=var_log1p_isr_sim, avg_gross_margin=avg_gm_sim,
+                γ_OLS=ψ̃_ann.γ_OLS, ρ_ω=ψ̃_ann.ρ_ω, σ_η2=ψ̃_ann.σ_η2, μ_η=ψ̃_ann.μ_η)
 end
 
 
 """
-    estimate_params_ii_full(params_base, df_monthly, df_annual; ...)
+    compute_full_ii_target_moments(df_monthly, df_annual)
+
+Compute the seven target moments used by the full indirect-inference objective.
+Returns a NamedTuple with fields:
+`avg_isr, var_log1p_isr, avg_gross_margin, γ_OLS, ρ_ω, σ_η2, μ_η`.
+"""
+function compute_full_ii_target_moments(df_monthly::DataFrame,
+                                         df_annual::DataFrame)
+    mo_data  = compute_monthly_moments(df_monthly)
+    ann_data = compute_annual_auxiliary(df_annual)
+    return (
+        avg_isr          = mo_data.avg_isr,
+        var_log1p_isr    = mo_data.var_log1p_isr,
+        avg_gross_margin = mo_data.avg_gross_margin,
+        γ_OLS            = ann_data.γ_OLS,
+        ρ_ω              = ann_data.ρ_ω,
+        σ_η2             = ann_data.σ_η2,
+        μ_η              = ann_data.μ_η
+    )
+end
+
+
+@inline function _full_ii_mhat_weights(target_moments::NamedTuple)
+    m̂ = [target_moments.avg_isr, target_moments.var_log1p_isr, target_moments.avg_gross_margin,
+                    target_moments.γ_OLS, target_moments.ρ_ω,
+                    target_moments.σ_η2, target_moments.μ_η]
+    w = [1.0 / max(abs(v), 1e-8)^2 for v in m̂]
+    return m̂, w
+end
+
+
+"""
+    select_best_grid_start(df_grid, target_moments)
+
+Choose the parameter vector from a precomputed grid (for example,
+`compute_moments_on_grid` output) that minimizes the same weighted objective
+used in `estimate_params_ii_full`, evaluated against precomputed target
+moments.
+
+Returns a NamedTuple with fields
+`row_index, obj_value, γ, μη, ση2, ρω, σν2, ϵ, δ`.
+"""
+function select_best_grid_start(df_grid::DataFrame,
+                                 target_moments::NamedTuple)
+                                 
+    m̂, w = _full_ii_mhat_weights(target_moments)
+
+    best_idx = 0
+    best_obj = Inf
+
+    for i in 1:nrow(df_grid)
+        if Bool(df_grid.failed[i])
+            continue
+        end
+
+        m̃ = [df_grid.avg_isr[i], df_grid.var_log1p_isr[i], df_grid.avg_gross_margin[i],
+              df_grid.γ_OLS[i],  df_grid.ρ_ω[i],           df_grid.σ_η2[i],
+              df_grid.μ_η[i]]
+        all(isfinite, m̃) || continue
+
+        sse = sum(w[k] * (m̂[k] - m̃[k])^2 for k in 1:7)
+        if sse < best_obj
+            best_obj = sse
+            best_idx = i
+        end
+    end
+
+    best_idx > 0 || error("No valid candidate rows found in df_grid")
+
+    return (
+        row_index = best_idx,
+        obj_value = best_obj,
+        γ   = Float64(df_grid.γ[best_idx]),
+        μη  = Float64(df_grid.μη[best_idx]),
+        ση2 = Float64(df_grid.ση2[best_idx]),
+        ρω  = Float64(df_grid.ρω[best_idx]),
+        σν2 = Float64(df_grid.σν2[best_idx]),
+        ϵ   = Float64(df_grid.ϵ[best_idx]),
+        δ   = Float64(df_grid.δ[best_idx])
+    )
+end
+
+
+"""
+    estimate_params_ii_full(params_base, target_moments; ...)
 
 Indirect inference estimator for all seven estimable structural parameters:
 
@@ -554,7 +638,7 @@ Indirect inference estimator for all seven estimable structural parameters:
 
 **Data moments** (7 total):
 - Monthly: avg BOM-inventory/revenue ISR, variance of log(1 + ISR), avg gross margin (p/c)
-- Annual: γ̂_OLS, ρ̂_ω, σ̂²_η, μ̂_ω  from the OLS auxiliary regression
+- Annual: γ_OLS, ρ_ω, σ_η2, μ_η from the OLS auxiliary regression
 
 **Objective** — normalised SSE:
 
@@ -564,14 +648,15 @@ Minimised via Nelder-Mead over the unconstrained reparameterisation
 `(γ, log μω, log σω2, arctanh ρω, log σν, ϵ, logit δ)`.
 
 The level mean of ν (μν) is held fixed at its value in `params_base`.
+`target_moments` must be a NamedTuple with fields:
+`avg_isr, var_log1p_isr, avg_gross_margin, γ_OLS, ρ_ω, σ_η2, μ_η`.
 
 # Returns
 Named tuple with fields `γ̂`, `μη`, `ση2`, `ρω`, `σν`, `ϵ̂`, `δ̂`,
 `obj_value`, `result`.
 """
 function estimate_params_ii_full(params_base::Parameters,
-                                  df_monthly::DataFrame,
-                                  df_annual::DataFrame;
+                                  target_moments::NamedTuple;
                                   n_firms::Int   = 200,
                                   n_years::Int   = 50,
                                   γ_lb::Float64  = 0.05,  γ_ub::Float64  = 3.0,
@@ -581,27 +666,24 @@ function estimate_params_ii_full(params_base::Parameters,
                                   σν2_lb::Float64 = 1e-6,  σν2_ub::Float64 = 5.0,
                                   ϵ_lb::Float64  = 1.1,   ϵ_ub::Float64  = 20.0,
                                   δ_lb::Float64  = 0.001, δ_ub::Float64  = 0.999,
+                                  init_guess::Union{Nothing,AbstractVector{<:Real}} = nothing,
                                   seed::Int      = 212311,
                                   max_iter::Int  = 1000,
                                   verbose::Bool  = true)
 
 
     # --- Data moments ---
-    mo_data  = compute_monthly_moments(df_monthly)
-    ann_data = compute_annual_auxiliary(df_annual)
-    m̂ = [mo_data.avg_isr, mo_data.var_log1p_isr, mo_data.avg_gross_margin,
-          ann_data.γ̂_OLS, ann_data.ρ̂_ω, ann_data.σ̂_η2, ann_data.μ̂_η]
-    w = [1.0 / max(abs(v), 1e-8)^2 for v in m̂]
+    m̂, w = _full_ii_mhat_weights(target_moments)
 
     if verbose
         println("\n=== Full II Estimation — Data Moments ===")
         @printf("  avg_isr          = %10.6f\n", m̂[1])
         @printf("  var_log1p_isr    = %10.6f\n", m̂[2])
         @printf("  avg_gross_margin = %10.6f\n", m̂[3])
-        @printf("  γ̂_OLS (annual)   = %10.6f\n", m̂[4])
-        @printf("  ρ̂_ω  (annual)    = %10.6f\n", m̂[5])
-        @printf("  σ̂²_η (annual)    = %10.6f\n", m̂[6])
-        @printf("  μ̂_η  (annual)    = %10.6f\n", m̂[7])
+        @printf("  γ_OLS (annual)   = %10.6f\n", m̂[4])
+        @printf("  ρ_ω   (annual)   = %10.6f\n", m̂[5])
+        @printf("  σ_η2  (annual)   = %10.6f\n", m̂[6])
+        @printf("  μ_η   (annual)   = %10.6f\n", m̂[7])
         println("\nStarting Nelder-Mead over (γ, μη, log σ²η, arctanh ρω, log σν, ϵ, logit δ)...")
         println("\n iter │    γ    │    μη   │   σ²η   │    ρω   │    σν   │    ϵ    │    δ    │   obj")
         println("──────┼─────────┼─────────┼─────────┼─────────┼─────────┼─────────┼─────────┼──────────")
@@ -633,7 +715,7 @@ function estimate_params_ii_full(params_base::Parameters,
             _, _, _, _, ppi, opi, _, _ = solve_model(params_iter)
             m̃_nt = _simulate_all_moments(params_iter, ppi, opi, n_firms, n_years, seed)
             m̃ = [m̃_nt.avg_isr, m̃_nt.var_log1p_isr, m̃_nt.avg_gross_margin,
-                  m̃_nt.γ̂_OLS,  m̃_nt.ρ̂_ω,   m̃_nt.σ̂_η2, m̃_nt.μ̂_η]
+                m̃_nt.γ_OLS, m̃_nt.ρ_ω, m̃_nt.σ_η2, m̃_nt.μ_η]
             sse = sum(w[k] * (m̂[k] - m̃[k])^2 for k in 1:7)
 
             if verbose
@@ -647,15 +729,27 @@ function estimate_params_ii_full(params_base::Parameters,
         end
     end
 
-    # Initial point from params_base
-    x0 = [params_base.γ,
-          clamp(params_base.μη,        μη_lb, μη_ub),
-          log(clamp(params_base.ση2,   σ2_lb,  σ2_ub)),
-          atanh(clamp(params_base.ρ_ω, ρ_lb,  ρ_ub)),
-          log(clamp(params_base.σν2, σν2_lb, σν2_ub)),
-          clamp(params_base.ϵ,         ϵ_lb,  ϵ_ub),
-          log(clamp(params_base.δ, δ_lb, δ_ub) /
-              (1.0 - clamp(params_base.δ, δ_lb, δ_ub)))]
+    # Initial point from params_base or user-supplied guess [γ, μη, ση2, ρω, σν2, ϵ, δ]
+    if isnothing(init_guess)
+        γ_init, μη_init, ση2_init, ρω_init, σν2_init, ϵ_init, δ_init =
+            params_base.γ, params_base.μη, params_base.ση2,
+            params_base.ρ_ω, params_base.σν2, params_base.ϵ, params_base.δ
+    else
+        length(init_guess) == 7 || error("init_guess must have length 7: [γ, μη, ση2, ρω, σν2, ϵ, δ]")
+        γ_init, μη_init, ση2_init, ρω_init, σν2_init, ϵ_init, δ_init =
+            Float64(init_guess[1]), Float64(init_guess[2]), Float64(init_guess[3]),
+            Float64(init_guess[4]), Float64(init_guess[5]), Float64(init_guess[6]),
+            Float64(init_guess[7])
+    end
+
+    x0 = [clamp(γ_init,               γ_lb,  γ_ub),
+          clamp(μη_init,              μη_lb, μη_ub),
+          log(clamp(ση2_init,         σ2_lb,  σ2_ub)),
+          atanh(clamp(ρω_init,        ρ_lb,  ρ_ub)),
+          log(clamp(σν2_init,         σν2_lb, σν2_ub)),
+          clamp(ϵ_init,               ϵ_lb,  ϵ_ub),
+          log(clamp(δ_init,           δ_lb,  δ_ub) /
+              (1.0 - clamp(δ_init,    δ_lb,  δ_ub)))]
 
     result = Optim.optimize(obj, x0, Optim.NelderMead(),
                              Optim.Options(iterations=max_iter, show_trace=false,
@@ -716,7 +810,7 @@ columns `avg_isr, var_log1p_isr, avg_gross_margin, γ̂_OLS, ρ̂_ω, σ̂_η2, 
 """
 function compute_moments_on_grid(params_base::Parameters,
                                   param_vectors::AbstractVector{<:AbstractVector{<:Real}};
-                                  n_firms::Int              = 200,
+                                  n_firms::Int              = 10000,
                                   n_years::Int              = 20,
                                   seed::Int                 = 212311,
                                   max_value_iterations::Int = 500,
