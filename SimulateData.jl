@@ -176,3 +176,122 @@ function simulate_panel_data(params::Parameters;
 end
 
 
+"""
+    bootstrap_sample_panel(df_monthly, df_annual; sample_fraction=0.5, rng=Random.default_rng())
+
+Draw a firm-level bootstrap sample from a simulated monthly/annual panel.
+
+Firms are sampled with replacement, and each sampled firm is assigned a new
+bootstrap firm id so repeated draws of the same firm remain separate panel
+units in the resampled data.
+
+Returns `(monthly_boot, annual_boot)`.
+"""
+function bootstrap_sample_panel(df_monthly::DataFrame,
+                                df_annual::DataFrame;
+                                sample_fraction::Float64 = 0.5,
+                                rng::AbstractRNG = Random.default_rng())
+    0.0 < sample_fraction <= 1.0 || error("sample_fraction must lie in (0, 1]")
+
+    firm_ids = unique(df_monthly.firm_id)
+    n_firms = length(firm_ids)
+    n_draws = max(1, round(Int, sample_fraction * n_firms))
+    sampled_firms = rand(rng, firm_ids, n_draws)
+
+    monthly_parts = DataFrame[]
+    annual_parts = DataFrame[]
+
+    for (boot_firm_id, source_firm_id) in enumerate(sampled_firms)
+        monthly_part = copy(df_monthly[df_monthly.firm_id .== source_firm_id, :])
+        annual_part = copy(df_annual[df_annual.firm_id .== source_firm_id, :])
+        monthly_part.firm_id .= boot_firm_id
+        annual_part.firm_id .= boot_firm_id
+        push!(monthly_parts, monthly_part)
+        push!(annual_parts, annual_part)
+    end
+
+    return vcat(monthly_parts...), vcat(annual_parts...)
+end
+
+
+"""
+    bootstrap_moments(df_monthly, df_annual; sample_fraction=0.5, n_boot=100, seed=nothing)
+
+Compute the full indirect-inference moments on repeated firm-level bootstrap
+samples of the supplied monthly and annual panels.
+
+Returns a vector of NamedTuples, one per bootstrap draw, each with fields:
+`avg_isr, var_log1p_isr, avg_gross_margin, γ_OLS, ρ_ω, σ_η2, μ_η`.
+
+Requires `compute_full_ii_target_moments` to be available in scope.
+"""
+function bootstrap_moments(df_monthly::DataFrame,
+                           df_annual::DataFrame;
+                           sample_fraction::Float64 = 0.5,
+                           n_boot::Int = 100,
+                           seed::Union{Int,Nothing} = nothing)
+    n_boot > 0 || error("n_boot must be positive")
+    rng = isnothing(seed) ? Random.default_rng() : MersenneTwister(seed)
+
+    draws = Vector{NamedTuple}(undef, n_boot)
+    for b in 1:n_boot
+        monthly_boot, annual_boot = bootstrap_sample_panel(df_monthly, df_annual;
+                                                           sample_fraction=sample_fraction,
+                                                           rng=rng)
+        draws[b] = compute_full_ii_target_moments(monthly_boot, annual_boot)
+    end
+
+    return draws
+end
+
+
+"""
+    bootstrap_moment_variances(df_monthly, df_annual; sample_fraction=0.5, n_boot=100, seed=nothing)
+
+Run the firm-level bootstrap and return the variance of each of the seven
+moments across bootstrap draws, along with their variance-covariance matrix.
+
+Returns a NamedTuple with fields:
+`variances`, `vcov`, `moment_names`.
+
+- `variances` is a NamedTuple with fields
+    `avg_isr, var_log1p_isr, avg_gross_margin, γ_OLS, ρ_ω, σ_η2, μ_η`
+- `vcov` is the full variance-covariance matrix in the same moment order
+- `moment_names` records that order explicitly
+"""
+function bootstrap_moment_variances(df_monthly::DataFrame,
+                                    df_annual::DataFrame;
+                                    sample_fraction::Float64 = 0.5,
+                                    n_boot::Int = 100,
+                                    seed::Union{Int,Nothing} = nothing)
+    draws = bootstrap_moments(df_monthly, df_annual;
+                              sample_fraction=sample_fraction,
+                              n_boot=n_boot,
+                              seed=seed)
+
+    moment_names = (:avg_isr, :var_log1p_isr, :avg_gross_margin, :γ_OLS, :ρ_ω, :σ_η2, :μ_η)
+    moment_matrix = hcat([
+        [draw.avg_isr, draw.var_log1p_isr, draw.avg_gross_margin,
+         draw.γ_OLS, draw.ρ_ω, draw.σ_η2, draw.μ_η]
+        for draw in draws
+    ]...)'
+    vcov = cov(moment_matrix)
+
+    variances = (
+        avg_isr = vcov[1, 1],
+        var_log1p_isr = vcov[2, 2],
+        avg_gross_margin = vcov[3, 3],
+        γ_OLS = vcov[4, 4],
+        ρ_ω = vcov[5, 5],
+        σ_η2 = vcov[6, 6],
+        μ_η = vcov[7, 7]
+    )
+
+    return (
+        variances = variances,
+        vcov = vcov,
+        moment_names = moment_names
+    )
+end
+
+

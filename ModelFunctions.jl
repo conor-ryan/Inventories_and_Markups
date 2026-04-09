@@ -1,4 +1,4 @@
-using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Interpolations
+using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Interpolations, Random
 
 # ---------------------------------------------------
 # Parameters struct (matches SolveModel.jl)
@@ -764,8 +764,8 @@ end
 
 Draw the next ω grid index from row `current_idx` of the Tauchen transition matrix.
 """
-function draw_ω_index(params::Parameters, current_idx::Int)
-    r = rand()
+function draw_ω_index(rng::AbstractRNG, params::Parameters, current_idx::Int)
+    r = rand(rng)
     cumprob = 0.0
     for k in 1:params.Q_ω
         cumprob += params.P_ω[current_idx, k]
@@ -776,13 +776,17 @@ function draw_ω_index(params::Parameters, current_idx::Int)
     return params.Q_ω
 end
 
+function draw_ω_index(params::Parameters, current_idx::Int)
+    return draw_ω_index(Random.default_rng(), params, current_idx)
+end
+
 """
     draw_ω_index_ergodic(params)
 
 Draw an initial ω grid index from the ergodic stationary distribution `π_ω`.
 """
-function draw_ω_index_ergodic(params::Parameters)
-    r = rand()
+function draw_ω_index_ergodic(rng::AbstractRNG, params::Parameters)
+    r = rand(rng)
     cumprob = 0.0
     for k in 1:params.Q_ω
         cumprob += params.π_ω[k]
@@ -793,11 +797,15 @@ function draw_ω_index_ergodic(params::Parameters)
     return params.Q_ω
 end
 
+function draw_ω_index_ergodic(params::Parameters)
+    return draw_ω_index_ergodic(Random.default_rng(), params)
+end
+
 
 # ---------------------------------------------------
 # Simulation of firm dynamics
 # ---------------------------------------------------
-function simulate_firm(num_simulations::Int, num_periods::Int, price_policy_interp, order_policy_interp, params; burn_in::Int=100)
+function simulate_firm(rng::AbstractRNG, num_simulations::Int, num_periods::Int, price_policy_interp, order_policy_interp, params; burn_in::Int=100)
     """
     Simulate firm inventory dynamics over multiple periods and simulations.
     Returns vectors of beginning-of-period inventory, demand, operating expense,
@@ -811,16 +819,16 @@ function simulate_firm(num_simulations::Int, num_periods::Int, price_policy_inte
     
     for sim in 1:num_simulations
         # Random starting inventory; initial ω drawn from ergodic distribution
-        s_current = rand(Sgrid)
-        ω_idx     = draw_ω_index_ergodic(params)
+        s_current = rand(rng, Sgrid)
+        ω_idx     = draw_ω_index_ergodic(rng, params)
 
         for period in 1:burn_in
             p_opt     = price_policy_interp(s_current, ω_idx)
             n_opt     = order_policy_interp(s_current, ω_idx)
-            ν         = rand(params.dist)
+            ν         = rand(rng, params.dist)
             D         = min(ν * p_opt^(-params.ϵ), s_current)
             s_current = max((1 - params.δ) * (s_current - D + n_opt), 0.0)
-            ω_idx     = draw_ω_index(params, ω_idx)
+            ω_idx     = draw_ω_index(rng, params, ω_idx)
         end
 
         for period in 1:num_periods
@@ -836,7 +844,7 @@ function simulate_firm(num_simulations::Int, num_periods::Int, price_policy_inte
             ω_current = params.ω_grid[ω_idx]
 
             # Draw demand shock from lognormal
-            ν = rand(params.dist)
+            ν = rand(rng, params.dist)
 
             # Calculate demand
             D = min(ν * p_opt^(-params.ϵ), s_current)
@@ -856,11 +864,15 @@ function simulate_firm(num_simulations::Int, num_periods::Int, price_policy_inte
             s_current = (1 - params.δ) * (s_end + n_opt)
 
             # Transition ω for next period via Markov chain
-            ω_idx = draw_ω_index(params, ω_idx)
+            ω_idx = draw_ω_index(rng, params, ω_idx)
         end
     end
     
     return all_inventory_levels, all_demand_levels, all_expenses, all_revenue
+end
+
+function simulate_firm(num_simulations::Int, num_periods::Int, price_policy_interp, order_policy_interp, params; burn_in::Int=100)
+    return simulate_firm(Random.default_rng(), num_simulations, num_periods, price_policy_interp, order_policy_interp, params; burn_in=burn_in)
 end
 
 

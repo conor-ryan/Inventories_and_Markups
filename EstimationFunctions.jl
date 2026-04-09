@@ -45,9 +45,9 @@ function estimate_gamma_bc(params::Parameters, df::DataFrame;
                                   Smax=params.Smax, Ns=params.Ns,
                                   size=params.size)
         _, _, _, _, ppi_iter, opi_iter, _, _ = solve_model(params_iter)
-        Random.seed!(seed)
+        rng = MersenneTwister(seed)
         inv_i, dem_i, exp_i, rev_i =
-            simulate_firm(n_firms, n_periods, ppi_iter, opi_iter, params_iter)
+            simulate_firm(rng, n_firms, n_periods, ppi_iter, opi_iter, params_iter)
 
         # Model-implied bias: plim(γ̂_z-IV) = γ + Cov(z, log ω) / Cov(z, log D)
         ω_i         = fill(NaN, length(exp_i))
@@ -282,12 +282,10 @@ function _simulate_and_get_annual(params::Parameters, ppi, opi,
                                    n_firms::Int, n_years::Int,
                                    seed::Union{Int,Nothing})
     n_months = n_years * 12
-    if !isnothing(seed)
-        Random.seed!(seed)
-    end
+    rng = isnothing(seed) ? Random.default_rng() : MersenneTwister(seed)
 
     inv_sim, dem_sim, exp_sim, rev_sim =
-        simulate_firm(n_firms, n_months, ppi, opi, params)
+        simulate_firm(rng, n_firms, n_months, ppi, opi, params)
 
     n_ann    = n_firms * n_years
     firm_ids = Vector{Int}(undef, n_ann)
@@ -494,12 +492,10 @@ function _simulate_all_moments(params::Parameters, ppi, opi,
                                 n_firms::Int, n_years::Int,
                                 seed::Union{Int,Nothing})
     n_months = n_years * 12
-    if !isnothing(seed)
-        Random.seed!(seed)
-    end
+    rng = isnothing(seed) ? Random.default_rng() : MersenneTwister(seed)
 
     inv_sim, dem_sim, exp_sim, rev_sim =
-        simulate_firm(n_firms, n_months, ppi, opi, params)
+        simulate_firm(rng, n_firms, n_months, ppi, opi, params)
 
     # Monthly moments
     valid_mo = (dem_sim .> 0) .& (rev_sim .> 0)
@@ -562,17 +558,14 @@ function compute_full_ii_target_moments(df_monthly::DataFrame,
 end
 
 
-@inline function _full_ii_mhat_weights(target_moments::NamedTuple)
-    m̂ = [target_moments.avg_isr, target_moments.var_log1p_isr, target_moments.avg_gross_margin,
-                    target_moments.γ_OLS, target_moments.ρ_ω,
-                    target_moments.σ_η2, target_moments.μ_η]
-    w = [1.0 / max(abs(v), 1e-8)^2 for v in m̂]
-    return m̂, w
+@inline function _full_ii_target_vector(target_moments::NamedTuple)
+    return [target_moments.avg_isr, target_moments.var_log1p_isr, target_moments.avg_gross_margin,
+            target_moments.γ_OLS, target_moments.ρ_ω, target_moments.σ_η2, target_moments.μ_η]
 end
 
 
 """
-    select_best_grid_start(df_grid, target_moments)
+    select_best_grid_start(df_grid, target_moments; weighting_matrix)
 
 Choose the parameter vector from a precomputed grid (for example,
 `compute_moments_on_grid` output) that minimizes the same weighted objective
@@ -583,9 +576,10 @@ Returns a NamedTuple with fields
 `row_index, obj_value, γ, μη, ση2, ρω, σν2, ϵ, δ`.
 """
 function select_best_grid_start(df_grid::DataFrame,
-                                 target_moments::NamedTuple)
+                                 target_moments::NamedTuple,
+                                 W::AbstractMatrix{<:Real})
                                  
-    m̂, w = _full_ii_mhat_weights(target_moments)
+    m̂ = _full_ii_target_vector(target_moments)
 
     best_idx = 0
     best_obj = Inf
@@ -600,9 +594,10 @@ function select_best_grid_start(df_grid::DataFrame,
               df_grid.μ_η[i]]
         all(isfinite, m̃) || continue
 
-        sse = sum(w[k] * (m̂[k] - m̃[k])^2 for k in 1:7)
-        if sse < best_obj
-            best_obj = sse
+        M = m̂ - m̃
+        obj_value = dot(M, W * M)
+        if obj_value < best_obj
+            best_obj = obj_value
             best_idx = i
         end
     end
@@ -624,7 +619,7 @@ end
 
 
 """
-    estimate_params_ii_full(params_base, target_moments; ...)
+    estimate_params_ii_full(params_base, target_moments; weighting_matrix, ...)
 
 Indirect inference estimator for all seven estimable structural parameters:
 
@@ -642,9 +637,11 @@ Indirect inference estimator for all seven estimable structural parameters:
 - Monthly: avg BOM-inventory/revenue ISR, variance of log(1 + ISR), avg gross margin (p/c)
 - Annual: γ_OLS, ρ_ω, σ_η2, μ_η from the OLS auxiliary regression
 
-**Objective** — normalised SSE:
+**Objective** — quadratic form:
 
-    obj(θ) = Σ_k  [(m̂_k − m̃_k(θ)) / |m̂_k|]²
+    obj(θ) = M(θ)' W M(θ)
+
+where `M(θ) = m̂ − m̃(θ)` and `W` is a required 7×7 weighting matrix.
 
 Minimised via Nelder-Mead over the unconstrained reparameterisation
 `(γ, log μω, log σω2, arctanh ρω, log σν, ϵ, logit δ)`.
@@ -658,7 +655,8 @@ Named tuple with fields `γ̂`, `μη`, `ση2`, `ρω`, `σν`, `ϵ̂`, `δ̂`,
 `obj_value`, `result`.
 """
 function estimate_params_ii_full(params_base::Parameters,
-                                  target_moments::NamedTuple;
+                                  target_moments::NamedTuple,
+                                  W::AbstractMatrix{<:Real};
                                   n_firms::Int   = 200,
                                   n_years::Int   = 50,
                                   γ_lb::Float64  = 0.05,  γ_ub::Float64  = 3.0,
@@ -675,7 +673,7 @@ function estimate_params_ii_full(params_base::Parameters,
 
 
     # --- Data moments ---
-    m̂, w = _full_ii_mhat_weights(target_moments)
+    m̂ = _full_ii_target_vector(target_moments)
 
     if verbose
         println("\n=== Full II Estimation — Data Moments ===")
@@ -718,7 +716,8 @@ function estimate_params_ii_full(params_base::Parameters,
             m̃_nt = _simulate_all_moments(params_iter, ppi, opi, n_firms, n_years, seed)
             m̃ = [m̃_nt.avg_isr, m̃_nt.var_log1p_isr, m̃_nt.avg_gross_margin,
                 m̃_nt.γ_OLS, m̃_nt.ρ_ω, m̃_nt.σ_η2, m̃_nt.μ_η]
-            sse = sum(w[k] * (m̂[k] - m̃[k])^2 for k in 1:7)
+            M = m̂ - m̃
+            sse = dot(M, W * M)
 
             if verbose
                 @printf("  %4d │ %7.4f │ %7.4f │ %7.5f │ %7.4f │ %7.4f │ %7.3f │ %7.4f │ %9.5f\n",
@@ -857,7 +856,7 @@ function compute_moments_on_grid(params_base::Parameters,
     # --- Progress tracking --------------------------------------------------
     counter    = Threads.Atomic{Int}(0)
     print_lock = ReentrantLock()
-    report_step = max(20, n_total ÷ 10)   # print at ~10 % increments
+    report_step = max(20, n_total ÷ 40)   # print at ~2.5 % increments
     t_start     = time()
 
     # --- Main parallel loop -------------------------------------------------
@@ -891,7 +890,8 @@ function compute_moments_on_grid(params_base::Parameters,
 
             _, _, _, _, ppi, opi, _, converged_i = solve_model(params_i,maxiter=max_value_iterations)
             !converged_i && error("value function did not converge")
-            m̃ = _simulate_all_moments(params_i, ppi, opi, n_firms, n_years, seed)
+            row_seed = seed + idx - 1
+            m̃ = _simulate_all_moments(params_i, ppi, opi, n_firms, n_years, row_seed)
 
             out_avg_isr[idx]  = m̃.avg_isr
             out_var_log1p_isr[idx]  = m̃.var_log1p_isr

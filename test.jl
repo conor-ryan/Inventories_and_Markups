@@ -5,11 +5,15 @@ include("ModelFunctions.jl")
 include("EstimationFunctions.jl")
 include("SimulateData.jl")
 
-function full_ii_objective_from_moments(target_moments::NamedTuple, simulated_moments::NamedTuple)
-    m_hat, w = _full_ii_mhat_weights(target_moments)
+function full_ii_objective_from_moments(target_moments::NamedTuple,
+                                        simulated_moments::NamedTuple,
+                                        weighting_matrix::AbstractMatrix{<:Real})
+    m_hat = _full_ii_target_vector(target_moments)
+    W = _full_ii_weighting_matrix(weighting_matrix)
     m_tilde = [simulated_moments.avg_isr, simulated_moments.var_log1p_isr, simulated_moments.avg_gross_margin,
                simulated_moments.γ_OLS, simulated_moments.ρ_ω, simulated_moments.σ_η2, simulated_moments.μ_η]
-    return sum(w[k] * (m_hat[k] - m_tilde[k])^2 for k in 1:7)
+    M = m_hat - m_tilde
+    return dot(M, W * M)
 end
 
 function row_moments(df_grid::DataFrame, idx::Int)
@@ -71,8 +75,8 @@ panel_n_months = 60
 panel_burn_in = 100
 panel_seed = 212311
 
-est_n_firms = 100
-est_n_years = 25
+est_n_firms = 5000
+est_n_years = 20
 est_seed = 212311
 
 grid_n_firms = 40
@@ -90,12 +94,18 @@ df_monthly, df_annual = simulate_panel_data(params;
                                             burn_in=panel_burn_in,
                                             seed=panel_seed)
 target_moments = compute_full_ii_target_moments(df_monthly, df_annual)
+bootstrap_vars = bootstrap_moment_variances(df_monthly, df_annual;
+                                            sample_fraction=0.5,
+                                            n_boot=100,
+                                            seed=panel_seed)
+W = inv(bootstrap_vars.vcov)
+W = W ./ maximum(abs.(W))
 
 println("Loading grid moments and selecting best point...")
 df_grid = CSV.read(grid_path, DataFrame)
-start_guess = select_best_grid_start(df_grid, target_moments)
+start_guess = select_best_grid_start(df_grid, target_moments; weighting_matrix=W)
 stored_moments = row_moments(df_grid, start_guess.row_index)
-stored_obj = full_ii_objective_from_moments(target_moments, stored_moments)
+stored_obj = full_ii_objective_from_moments(target_moments, stored_moments, W)
 
 @printf("Best row index: %d\n", start_guess.row_index)
 @printf("Grid objective at best row: %.6f\n", start_guess.obj_value)
@@ -109,11 +119,11 @@ params_start = params_from_start_guess(params, start_guess)
 _, _, _, _, ppi, opi, _, converged = solve_model(params_start)
 converged || error("solve_model did not converge at selected starting point")
 fresh_moments = _simulate_all_moments(params_start, ppi, opi, est_n_firms, est_n_years, est_seed)
-fresh_obj = full_ii_objective_from_moments(target_moments, fresh_moments)
+fresh_obj = full_ii_objective_from_moments(target_moments, fresh_moments, W)
 
 println("Re-simulating the selected parameter vector with the original SimulateMoments settings...")
 fresh_grid_moments = _simulate_all_moments(params_start, ppi, opi, grid_n_firms, grid_n_years, grid_seed)
-fresh_grid_obj = full_ii_objective_from_moments(target_moments, fresh_grid_moments)
+fresh_grid_obj = full_ii_objective_from_moments(target_moments, fresh_grid_moments, W)
 
 println("\nComparison against fresh simulation with estimation settings:")
 print_moment_comparison(target_moments, stored_moments, fresh_moments)

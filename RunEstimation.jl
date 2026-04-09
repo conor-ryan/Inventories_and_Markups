@@ -32,6 +32,24 @@ CSV.write(annual_path, df_annual)
 println("Monthly data written to $monthly_path")
 println("Annual data written to  $annual_path")
 
+println("\n=== Bootstrap Moment Variances ===")
+bootstrap_vars = bootstrap_moment_variances(df_monthly, df_annual;
+                                            sample_fraction=0.5,
+                                            n_boot=100,
+                                            seed=212311)
+@printf("avg_isr          = %10.6f\n", bootstrap_vars.variances.avg_isr)
+@printf("var_log1p_isr    = %10.6f\n", bootstrap_vars.variances.var_log1p_isr)
+@printf("avg_gross_margin = %10.6f\n", bootstrap_vars.variances.avg_gross_margin)
+@printf("γ_OLS            = %10.6f\n", bootstrap_vars.variances.γ_OLS)
+@printf("ρ_ω              = %10.6f\n", bootstrap_vars.variances.ρ_ω)
+@printf("σ_η2             = %10.6f\n", bootstrap_vars.variances.σ_η2)
+@printf("μ_η              = %10.6f\n", bootstrap_vars.variances.μ_η)
+
+W = inv(bootstrap_vars.vcov)
+# n = size(W,1)
+# norm = ones(n)'*W*ones(n)
+# W = W./norm
+
 # ---------------------------------------------------
 # Full 7-parameter indirect inference estimation
 # ---------------------------------------------------
@@ -44,16 +62,16 @@ target_moments = compute_full_ii_target_moments(df_monthly, df_annual)
 
 println("\n=== Selecting Initial Guess from Precomputed Moments Grid ===")
 df_grid = CSV.read(joinpath(out_dir, "moments.csv"), DataFrame)
-start_guess = select_best_grid_start(df_grid, target_moments)
+start_guess = select_best_grid_start(df_grid, target_moments,W)
 @printf("Best grid objective=%.6f | Start params: γ=%.6f, μη=%.6f, ση2=%.6f, ρω=%.6f, σν2=%.6f, ϵ=%.6f, δ=%.6f\n",
         start_guess.obj_value,
         start_guess.γ, start_guess.μη, start_guess.ση2, start_guess.ρω,
         start_guess.σν2, start_guess.ϵ, start_guess.δ)
 
 println("\n=== Estimating all 7 parameters via Full Indirect Inference ===")
-ii_full = estimate_params_ii_full(params, target_moments;
-                                  n_firms  = 100,
-                                  n_years  = 25,
+ii_full = estimate_params_ii_full(params, target_moments,W;
+                                  n_firms  = 5000,
+                                  n_years  = 20,
                                   init_guess = [start_guess.γ, start_guess.μη, start_guess.ση2,
                                                 start_guess.ρω, start_guess.σν2, start_guess.ϵ,
                                                 start_guess.δ],
