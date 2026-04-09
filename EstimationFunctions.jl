@@ -46,15 +46,21 @@ function estimate_gamma_bc(params::Parameters, df::DataFrame;
                                   size=params.size)
         _, _, _, _, ppi_iter, opi_iter, _, _ = solve_model(params_iter)
         Random.seed!(seed)
-        _, _, dem_i, _, exp_i, ω_i, isr_i =
+        inv_i, dem_i, exp_i, rev_i =
             simulate_firm(n_firms, n_periods, ppi_iter, opi_iter, params_iter)
 
         # Model-implied bias: plim(γ̂_z-IV) = γ + Cov(z, log ω) / Cov(z, log D)
-        mask_i     = (exp_i .> 0) .& (dem_i .> 0) .& (ω_i .> 0)
-        Δisr_i     = similar(isr_i)
+        ω_i         = fill(NaN, length(exp_i))
+        inv_sales_i = fill(NaN, length(inv_i))
+        valid_rev   = rev_i .> 0
+        valid_dem   = dem_i .> 0
+        ω_i[valid_dem] .= exp_i[valid_dem] ./ (dem_i[valid_dem] .^ params_iter.γ)
+        inv_sales_i[valid_rev] .= inv_i[valid_rev] ./ rev_i[valid_rev]
+        mask_i      = (exp_i .> 0) .& valid_dem .& (ω_i .> 0) .& valid_rev
+        Δisr_i     = similar(inv_sales_i)
         Δisr_i[1]  = NaN
-        for t in 2:length(isr_i)
-            Δisr_i[t] = (t - 1) % n_periods == 0 ? NaN : isr_i[t] - isr_i[t - 1]
+        for t in 2:length(inv_sales_i)
+            Δisr_i[t] = (t - 1) % n_periods == 0 ? NaN : inv_sales_i[t] - inv_sales_i[t - 1]
         end
         valid_i = mask_i .& .!isnan.(Δisr_i)
         bias_i  = cov(Δisr_i[valid_i], log.(ω_i[valid_i])) /
@@ -280,7 +286,7 @@ function _simulate_and_get_annual(params::Parameters, ppi, opi,
         Random.seed!(seed)
     end
 
-    inv_sim, _, dem_sim, _, exp_sim, _, isr_sim =
+    inv_sim, dem_sim, exp_sim, rev_sim =
         simulate_firm(n_firms, n_months, ppi, opi, params)
 
     n_ann    = n_firms * n_years
@@ -298,9 +304,7 @@ function _simulate_and_get_annual(params::Parameters, ppi, opi,
             m_last  = m0 + yr * 12
             a_idx   = a0 + yr
 
-            # Monthly revenue: isr_sim[t] = c·s_t/(p_t·D_t), so p_t·D_t = c·s_t/isr_sim[t]
-            ann_rev = sum(isr_sim[t] > 0 ? params.c * inv_sim[t] / isr_sim[t] : 0.0
-                          for t in m_first:m_last)
+            ann_rev = sum(rev_sim[m_first:m_last])
             avg_monthly_rev  = ann_rev / 12
 
             firm_ids[a_idx]  = firm
@@ -494,15 +498,13 @@ function _simulate_all_moments(params::Parameters, ppi, opi,
         Random.seed!(seed)
     end
 
-    inv_sim, _, dem_sim, _, exp_sim, _, isr_sim =
+    inv_sim, dem_sim, exp_sim, rev_sim =
         simulate_firm(n_firms, n_months, ppi, opi, params)
 
     # Monthly moments
-    # isr_sim[t] = c·s_t/(p_t·D_t)  →  BOM/revenue ISR = s_t/(p_t·D_t) = isr_sim[t]/c
-    # gross margin = p/c = s_t / (isr_sim[t]·D_t)   (requires D_t > 0)
-    valid_mo = dem_sim .> 0
-    isr_mo   = isr_sim[valid_mo]
-    gm_mo    = inv_sim[valid_mo] ./ (isr_sim[valid_mo] .* dem_sim[valid_mo])
+    valid_mo = (dem_sim .> 0) .& (rev_sim .> 0)
+    isr_mo   = inv_sim[valid_mo] ./ rev_sim[valid_mo]
+    gm_mo    = rev_sim[valid_mo] ./ (params.c .* dem_sim[valid_mo])
     avg_isr_sim = mean(isr_mo)
     var_log1p_isr_sim = var(log1p.(isr_mo))
     avg_gm_sim  = mean(gm_mo)
@@ -894,10 +896,10 @@ function compute_moments_on_grid(params_base::Parameters,
             out_avg_isr[idx]  = m̃.avg_isr
             out_var_log1p_isr[idx]  = m̃.var_log1p_isr
             out_avg_gm[idx]   = m̃.avg_gross_margin
-            out_γ_ols[idx]    = m̃.γ̂_OLS
-            out_ρω_ar1[idx]   = m̃.ρ̂_ω
-            out_σ_η2[idx]     = m̃.σ̂_η2
-            out_μη_ar1[idx]   = m̃.μ̂_η
+            out_γ_ols[idx]    = m̃.γ_OLS
+            out_ρω_ar1[idx]   = m̃.ρ_ω
+            out_σ_η2[idx]     = m̃.σ_η2
+            out_μη_ar1[idx]   = m̃.μ_η
             out_failed[idx]   = false
         catch
             # Leave NaN outputs and failed = true

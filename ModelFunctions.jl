@@ -137,6 +137,30 @@ end
     end
 end
 
+struct OmegaPolicyInterp
+    nodes :: Vector{UniformInterp}
+    ω_grid :: Vector{Float64}
+end
+
+@inline function (f::OmegaPolicyInterp)(x::Float64, ω_idx::Int)::Float64
+    @inbounds return f.nodes[ω_idx](x)
+end
+
+@inline function (f::OmegaPolicyInterp)(x::Float64, ω::Float64)::Float64
+    j = argmin(abs.(f.ω_grid .- ω))
+    @inbounds return f.nodes[j](x)
+end
+
+function build_fast_policy_interpolants(Sgrid::AbstractVector{<:Real},
+                                        p_policy::AbstractMatrix{<:Real},
+                                        order_policy::AbstractMatrix{<:Real})
+    inv_h = (length(Sgrid) - 1) / (Sgrid[end] - Sgrid[1])
+    s_lo = Float64(Sgrid[1])
+    price_nodes = [UniformInterp(Vector{Float64}(p_policy[:, j]), s_lo, inv_h) for j in axes(p_policy, 2)]
+    order_nodes = [UniformInterp(Vector{Float64}(order_policy[:, j]), s_lo, inv_h) for j in axes(order_policy, 2)]
+    return price_nodes, order_nodes
+end
+
 
 """
     update_parameters(params::Parameters, x::Vector{Float64})
@@ -776,16 +800,14 @@ end
 function simulate_firm(num_simulations::Int, num_periods::Int, price_policy_interp, order_policy_interp, params; burn_in::Int=100)
     """
     Simulate firm inventory dynamics over multiple periods and simulations.
-    Returns vectors of beginning-of-period inventory, demand shocks, and demand levels.
+    Returns vectors of beginning-of-period inventory, demand, operating expense,
+    and revenue.
     """
     Sgrid = params.Sgrid
     all_inventory_levels = Float64[]
-    all_inventory_levels_eop = Float64[]
-    all_demand_shocks = Float64[]
     all_demand_levels = Float64[]
     all_expenses = Float64[]
-    all_cost_shocks = Float64[]
-    all_inv_sales_ratio = Float64[]
+    all_revenue = Float64[]
     
     for sim in 1:num_simulations
         # Random starting inventory; initial ω drawn from ergodic distribution
@@ -793,9 +815,8 @@ function simulate_firm(num_simulations::Int, num_periods::Int, price_policy_inte
         ω_idx     = draw_ω_index_ergodic(params)
 
         for period in 1:burn_in
-            ω_current = params.ω_grid[ω_idx]
-            p_opt     = price_policy_interp(s_current, ω_current)
-            n_opt     = order_policy_interp(s_current, ω_current)
+            p_opt     = price_policy_interp(s_current, ω_idx)
+            n_opt     = order_policy_interp(s_current, ω_idx)
             ν         = rand(params.dist)
             D         = min(ν * p_opt^(-params.ϵ), s_current)
             s_current = max((1 - params.δ) * (s_current - D + n_opt), 0.0)
@@ -806,18 +827,16 @@ function simulate_firm(num_simulations::Int, num_periods::Int, price_policy_inte
             # Record beginning-of-period inventory
             push!(all_inventory_levels, s_current)
 
-            ω_current = params.ω_grid[ω_idx]
-
             # Get optimal price and order quantity using interpolation
-            p_opt = price_policy_interp(s_current, ω_current)
+            p_opt = price_policy_interp(s_current, ω_idx)
 
             # Find closest grid point for order policy
-            n_opt = order_policy_interp(s_current, ω_current)
+            n_opt = order_policy_interp(s_current, ω_idx)
+
+            ω_current = params.ω_grid[ω_idx]
 
             # Draw demand shock from lognormal
             ν = rand(params.dist)
-            push!(all_demand_shocks, ν)
-            push!(all_cost_shocks,ω_current)
 
             # Calculate demand
             D = min(ν * p_opt^(-params.ϵ), s_current)
@@ -827,13 +846,11 @@ function simulate_firm(num_simulations::Int, num_periods::Int, price_policy_inte
             c_opp = operating_expense(ω_current,D,params)
             push!(all_expenses,c_opp)
 
-            # Inventory to Sales Ratio
-            curr_ratio = params.c*s_current/(p_opt*D)
-            push!(all_inv_sales_ratio,curr_ratio)
+            # Revenue
+            push!(all_revenue, p_opt * D)
 
             # Ending inventory after demand
             s_end = s_current - D
-            push!(all_inventory_levels_eop, s_end)
 
             # Next period beginning inventory: order + depreciation
             s_current = (1 - params.δ) * (s_end + n_opt)
@@ -843,8 +860,7 @@ function simulate_firm(num_simulations::Int, num_periods::Int, price_policy_inte
         end
     end
     
-    return all_inventory_levels, all_demand_shocks, all_demand_levels, all_inventory_levels_eop,
-                    all_expenses, all_cost_shocks, all_inv_sales_ratio
+    return all_inventory_levels, all_demand_levels, all_expenses, all_revenue
 end
 
 
@@ -867,10 +883,8 @@ function compute_firm_statistics(N::Int, T::Int, price_policy_interp, order_poli
         ω_idx     = draw_ω_index_ergodic(params)
 
         for period in 1:T
-            ω_current = params.ω_grid[ω_idx]
-
-            p_opt = price_policy_interp(s_current, ω_current)
-            n_opt = order_policy_interp(s_current, ω_current)
+            p_opt = price_policy_interp(s_current, ω_idx)
+            n_opt = order_policy_interp(s_current, ω_idx)
 
             push!(all_inventories, s_current)
             push!(all_markups, p_opt / params.c)
@@ -934,19 +948,11 @@ function solve_model(params; full=false, verbose=false,fast_interp=true,maxiter=
     end
     V, order_policy, p_policy, V_by_omega, converged = solve_value_function(params, full=full,fast_interp=fast_interp,maxiter=maxiter)
 
-    # Build s-interpolation at each omega grid point; use nearest-grid-point lookup in omega.
-    price_policy_interp_nodes = [LinearInterpolation(Sgrid, p_policy[:, j], extrapolation_bc=Line()) for j in 1:Nω]
-    order_policy_interp_nodes = [LinearInterpolation(Sgrid, order_policy[:, j], extrapolation_bc=Line()) for j in 1:Nω]
+    price_policy_interp_nodes, order_policy_interp_nodes =
+        build_fast_policy_interpolants(Sgrid, p_policy, order_policy)
 
-    price_policy_interp = (s, ω) -> begin
-        j = argmin(abs.(ω_grid .- ω))
-        return price_policy_interp_nodes[j](s)
-    end
-
-    order_policy_interp = (s, ω) -> begin
-        j = argmin(abs.(ω_grid .- ω))
-        return order_policy_interp_nodes[j](s)
-    end
+    price_policy_interp = OmegaPolicyInterp(price_policy_interp_nodes, ω_grid)
+    order_policy_interp = OmegaPolicyInterp(order_policy_interp_nodes, ω_grid)
 
     Vinterp = LinearInterpolation(Sgrid, V, extrapolation_bc=Line())
 

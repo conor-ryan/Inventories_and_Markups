@@ -31,11 +31,8 @@ println()
 @btime _simulate_all_moments($params, $ppi, $opi, $n_firms, $n_years, $seed)
 
 println("\nProfiling _simulate_all_moments with @Profile...")
-@printf("  repetitions = %d\n", profile_repetitions)
 Profile.clear()
-@profile for rep in 1:profile_repetitions
-    _simulate_all_moments(params, ppi, opi, n_firms, n_years, seed + rep - 1)
-end
+@profile _simulate_all_moments(params, ppi, opi, n_firms, n_years, seed )
 
 println("\nProfile summary:")
-Profile.print(format=:tree, maxdepth=20, sortedby=:count)
+Profile.print(format=:tree, mincount=20, sortedby=:count)
