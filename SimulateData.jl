@@ -1,11 +1,11 @@
 using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Interpolations,
-      Random, Statistics, DataFrames, CSV, GLM, FixedEffectModels, Printf
+      Random, Statistics, DataFrames
 include("ModelFunctions.jl")
-include("EstimationFunctions.jl")
 
 """
-    simulate_panel_data(params, price_policy_interp, order_policy_interp;
-                        N=1000, M=60, burn_in=100, seed=nothing)
+    simulate_panel_data(params;
+                        N=1000, M=60, burn_in=100, seed=nothing,
+                        solve_verbose=false, solve_maxiter=1000)
 
 Simulate a balanced panel of N firms over M months. M must be a multiple of 12.
 
@@ -35,14 +35,18 @@ Annual DataFrame columns (N×(M÷12) rows):
 A burn-in of `burn_in` periods is discarded per firm to draw from the
 ergodic distribution rather than the arbitrary initial state.
 """
-function simulate_panel_data(params::Parameters,
-                              price_policy_interp,
-                              order_policy_interp;
+function simulate_panel_data(params::Parameters;
                               N::Int                   = 1000,
                               M::Int                   = 60,
                               burn_in::Int             = 100,
-                              seed::Union{Int,Nothing} = nothing)
+                              seed::Union{Int,Nothing} = nothing,
+                              solve_verbose::Bool      = false,
+                              solve_maxiter::Int       = 1000)
     @assert M % 12 == 0 "M must be a multiple of 12 for annual aggregation"
+
+    _, _, _, _, price_policy_interp, order_policy_interp, _, vf_converged =
+        solve_model(params, verbose=solve_verbose, maxiter=solve_maxiter)
+    vf_converged || error("solve_model did not converge within solve_maxiter=$(solve_maxiter)")
 
     if !isnothing(seed)
         Random.seed!(seed)
@@ -172,95 +176,3 @@ function simulate_panel_data(params::Parameters,
 end
 
 
-# ---------------------------------------------------
-# Main: solve model, simulate panel, save to CSV
-# ---------------------------------------------------
-
-params = Parameters(c=1.0, fc=0.0, μη=log(0.1), ση2=0.05, ρ_ω=0.1, γ=0.9,
-                    δ=0.05, β=0.95, ϵ=6.0, μν=1, σν2=0.09, 
-                    Smax=30, Ns=200, scale=1.0, size=100)
-
-println("Solving model...")
-p_policy, order_policy, V, V_by_omega, price_policy_interp, order_policy_interp, Vinterp =
-    solve_model(params)
-println("Model solved.")
-
-println("Simulating panel data (N=1000, M=60, burn_in=100)...")
-df_monthly, df_annual = simulate_panel_data(params, price_policy_interp, order_policy_interp;
-                                             N=1000, M=60, burn_in=100, seed=212311)
-println("Simulation complete. $(nrow(df_monthly)) monthly observations, $(nrow(df_annual)) annual observations.")
-println("\n--- Monthly summary ---")
-println(describe(df_monthly, :mean, :std, :min, :max))
-println("\n--- Annual summary ---")
-println(describe(df_annual, :mean, :std, :min, :max))
-
-out_dir  = joinpath(@__DIR__, "..", "SimulatedData")
-mkpath(out_dir)
-
-monthly_path = joinpath(out_dir, "simulated_panel_monthly.csv")
-annual_path  = joinpath(out_dir, "simulated_panel_annual.csv")
-CSV.write(monthly_path, df_monthly)
-CSV.write(annual_path,  df_annual)
-println("Monthly data written to $monthly_path")
-println("Annual data written to  $annual_path")
-
-
-# # ---------------------------------------------------
-# # Estimate γ from the annual simulated data using
-# # the iterative bias-corrected IV procedure
-# # ---------------------------------------------------
-
-# println("\n=== Auxiliary OLS Regression on Annual Data ===")
-# ψ̂_data = compute_annual_auxiliary(df_annual)
-# display(coeftable(ψ̂_data.ols_result))
-# println("\n=== AR(1) moments of log-ω proxy (annual) ===")
-# println("Parameter    Estimate       Std. Error")
-# @printf("ρω           %10.6f    %10.6f\n", ψ̂_data.ρ̂_ω,   ψ̂_data.se_ρω)
-# @printf("σω2          %10.6f    %10.6f\n", ψ̂_data.σ̂_η2,  ψ̂_data.se_σω2)
-# @printf("μω (level)   %10.6f    %10.6f\n", ψ̂_data.μ̂_ω,   ψ̂_data.se_μω)
-
-# println("\n=== Estimating γ, μω, σω2, ρω from Annual Data via Indirect Inference ===")
-# ii_result = estimate_params_ii_annual(params, df_annual;
-#                                        n_firms   = 200,
-#                                        n_years   = 50,
-#                                        max_iter  = 500,
-#                                        seed      = 212311,
-#                                        verbose   = true)
-
-# println("\n=== True vs Estimated (cost-shock estimator) ===")
-# println("Parameter   True          Estimated (monthly)")
-# @printf("γ           %10.6f    %10.6f\n", params.γ,       ii_result.γ̂)
-# @printf("μη          %10.6f    %10.6f\n", params.μη, ii_result.μη_monthly)
-# @printf("ση2         %10.6f    %10.6f\n", params.ση2,     ii_result.ση2_monthly)
-# @printf("ρω          %10.6f    %10.6f\n", params.ρ_ω,     ii_result.ρω_monthly)
-
-# ---------------------------------------------------
-# Full 7-parameter indirect inference estimation
-# ---------------------------------------------------
-
-println("\n=== Monthly Data Moments ===")
-mo_moments = compute_monthly_moments(df_monthly)
-@printf("avg_isr          = %10.6f\n", mo_moments.avg_isr)
-@printf("var_isr          = %10.6f\n", mo_moments.var_isr)
-@printf("avg_gross_margin = %10.6f\n", mo_moments.avg_gross_margin)
-
-println("\n=== Estimating all 7 parameters via Full Indirect Inference ===")
-rng_init = Random.MersenneTwister(999)
-# params_init = Parameters(c=1.0, fc=0.0, μη=0.8*log(0.2),ση2=0.01,ρ_ω=0.2, γ=0.8,δ=0.2, β=0.95, ϵ=8.0, μν=100, σν2=exp(8), Smax=100, Ns=200,scale=1.0,size=3.0)
-
-ii_full = estimate_params_ii_full(params, df_monthly, df_annual;
-                                   n_firms  = 100,
-                                   n_years  = 25,
-                                   max_iter = 500,
-                                   seed     = 212311,
-                                   verbose  = true)
-
-println("\n=== True vs Estimated (full 7-parameter estimator) ===")
-println("Parameter   True          Estimated")
-@printf("γ           %10.6f    %10.6f\n", params.γ,       ii_full.γ̂)
-@printf("μη           %10.6f    %10.6f\n", params.μη, ii_full.μη)
-@printf("ση2         %10.6f    %10.6f\n", params.ση2,     ii_full.ση2)
-@printf("ρω          %10.6f    %10.6f\n", params.ρ_ω,     ii_full.ρω)
-@printf("σν2         %10.6f    %10.6f\n", params.σν2,     ii_full.σν2)
-@printf("ϵ           %10.6f    %10.6f\n", params.ϵ,       ii_full.ϵ̂)
-@printf("δ           %10.6f    %10.6f\n", params.δ,       ii_full.δ̂)

@@ -8,30 +8,27 @@ params = Parameters(c=1.0, fc=0.0, μη=log(0.01),ση2=0.05,ρ_ω=0.1, γ=0.9,�
 
 
 
-# Build ~100 points near the baseline by varying only (ϵ, σν2, δ).
-ϵ_vals   = collect(range(4,  16,  length=3))
-σν2_vals = collect(range(0.09, 0.21, length=3))
-δ_vals   = collect(range(0.005,.025,length=3))
-μη_vals   = collect(range(log(0.01),log(0.1),length=3))
-γ_vals   = collect(range(0.7,1.1,length=3))
-ση2_vals   = collect(range(0.025,0.15,length=3))
-ρ_vals   = collect(range(0.1,0.5,length=3))
+# Parameter Bounds
+ϵ_bounds   = (4.0, 16.0)
+σν2_bounds = (0.09, 0.21)
+δ_bounds   = (0.005, 0.025)
+μη_bounds  = (log(0.01), log(0.1))
+γ_bounds   = (0.7, 1.1)
+ση2_bounds = (0.025, 0.15)
+ρ_bounds   = (0.1, 0.5)
 
+n_param_points = 5000
+param_bounds = [
+    γ_bounds,
+    μη_bounds,
+    ση2_bounds,
+    ρ_bounds,
+    σν2_bounds,
+    ϵ_bounds,
+    δ_bounds
+]
 
-param_vectors = Vector{Vector{Float64}}()
-sizehint!(param_vectors, length(ϵ_vals) * length(σν2_vals) * length(δ_vals))
-
-for ϵ_i in ϵ_vals, σν2_i in σν2_vals, δ_i in δ_vals, μη_i in μη_vals, γ_i in γ_vals , ση2_i in ση2_vals,  ρ_i in ρ_vals  
-    push!(param_vectors, [
-        γ_i,
-        μη_i,
-        ση2_i,
-        ρ_i,
-        σν2_i,
-        ϵ_i,
-        δ_i
-    ])
-end
+param_vectors = halton_param_vectors(param_bounds, n_param_points; seed=212311)
 
 # param_vectors = param_vectors[1:100]
 

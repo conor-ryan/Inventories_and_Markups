@@ -139,6 +139,78 @@ function estimate_omega_ar1(log_ω_proxy::AbstractVector{<:Real}, firm_boundary:
 end
 
 
+@inline function _radical_inverse(n::Int, base::Int)
+    x = 0.0
+    inv_base = 1.0 / base
+    f = inv_base
+    m = n
+    while m > 0
+        digit = m % base
+        x += digit * f
+        m = fld(m, base)
+        f *= inv_base
+    end
+    return x
+end
+
+
+"""
+    halton_param_vectors(bounds, n_points; seed=nothing)
+
+Generate `n_points` parameter vectors using a randomized Halton sequence over
+axis-aligned bounds.
+
+- `bounds` must be a vector of `(low, high)` tuples, one for each dimension.
+- Output is `Vector{Vector{Float64}}`, each inner vector matching the order in
+  `bounds`.
+- A random shift and random starting index are applied so draws are randomized
+  but still space-filling.
+"""
+function halton_param_vectors(bounds::Vector{<:Tuple{<:Real,<:Real}},
+                               n_points::Int;
+                               seed::Union{Int,Nothing}=nothing)
+    n_points > 0 || error("n_points must be positive")
+    d = length(bounds)
+    d > 0 || error("bounds must contain at least one dimension")
+
+    # Enough primes for this project's parameter dimensions.
+    primes = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53]
+    d <= length(primes) || error("Increase prime list length for higher dimension Halton sampling")
+
+    if !isnothing(seed)
+        Random.seed!(seed)
+    end
+
+    lowers = Vector{Float64}(undef, d)
+    spans  = Vector{Float64}(undef, d)
+    for j in 1:d
+        lo = Float64(bounds[j][1])
+        hi = Float64(bounds[j][2])
+        hi > lo || error("bounds[$j] must satisfy high > low")
+        lowers[j] = lo
+        spans[j]  = hi - lo
+    end
+
+    # Randomized Halton: random start index + Cranley-Patterson shift.
+    start_index = rand(1:100_000)
+    shifts = rand(d)
+
+    points = Vector{Vector{Float64}}(undef, n_points)
+    for i in 1:n_points
+        x = Vector{Float64}(undef, d)
+        n = start_index + i
+        for j in 1:d
+            u = _radical_inverse(n, primes[j])
+            u_shift = mod(u + shifts[j], 1.0)
+            x[j] = lowers[j] + spans[j] * u_shift
+        end
+        points[i] = x
+    end
+
+    return points
+end
+
+
 # ============================================================
 # Indirect Inference estimation of (γ, μω, σω2, ρω) from
 # annual panel data
