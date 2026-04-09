@@ -810,7 +810,7 @@ columns `avg_isr, var_log1p_isr, avg_gross_margin, γ̂_OLS, ρ̂_ω, σ̂_η2, 
 """
 function compute_moments_on_grid(params_base::Parameters,
                                   param_vectors::AbstractVector{<:AbstractVector{<:Real}};
-                                  n_firms::Int              = 10000,
+                                  n_firms::Int              = 5000,
                                   n_years::Int              = 20,
                                   seed::Int                 = 212311,
                                   max_value_iterations::Int = 500,
