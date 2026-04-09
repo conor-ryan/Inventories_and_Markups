@@ -73,23 +73,21 @@ _n_periods = 25000
 inventory_sim, demand_shocks_sim, demand_levels_sim, inv_eop_sim, expense_sim, ω_sim, inv_sales_ratio_sim = simulate_firm(40, _n_periods, price_policy_interp, order_policy_interp, params)
 println("Simulation complete. $(length(inventory_sim)) observations recorded.")
 
-# Run statistics simulation
-println("\nRunning statistics simulation...")
-Random.seed!(212311)  # Set seed for reproducibility
-stats = compute_firm_statistics(100, 500, price_policy_interp, order_policy_interp, params)
-println("Statistics simulation complete.")
-println("\n=== Firm Statistics ===")
-println("Average Inventory: $(round(stats.avg_inventory, digits=4))")
-println("Variance of Inventory: $(round(stats.var_inventory, digits=4))")
-println("Average Markup (p/c): $(round(stats.avg_markup, digits=4))")
+# Compute monthly moments using the existing EstimationFunctions helper
+println("\nComputing monthly moments from simulated data...")
+revenue_sim = params.c .* inventory_sim ./ inv_sales_ratio_sim
+df_monthly_sim = DataFrame(
+    inv_to_sales = inv_sales_ratio_sim ./ params.c,
+    revenue = revenue_sim,
+    cogs = expense_sim
+)
+monthly_moments = compute_monthly_moments(df_monthly_sim)
+println("Monthly moments complete.")
+println("\n=== Simulated Monthly Moments ===")
 println("Average Sales: $(round(mean(demand_levels_sim), digits=4))")
-println("Variance of Markup: $(round(stats.var_markup, digits=4))")
-println("Average Stockout Probability: $(round(stats.avg_stockout, digits=4))")
-println("Variance of Stockout Probability: $(round(stats.var_stockout, digits=4))")
-println("Correlation (Markup, Inventory): $(round(stats.corr_markup_inventory, digits=4))")
-println("Correlation (Markup, Inventory-to-Sales Ratio): $(round(stats.corr_markup_inventory_ratio, digits=4))")
-println("Average Inv-to-Sales Ratio (Avg Inv / Revenue): $(round(stats.inv_to_sales_ratio_avg, digits=4))")
-println("Variance of Inv-to-Sales Ratio (Avg Inv / Revenue): $(round(stats.inv_to_sales_ratio_var, digits=4))")
+println("Average Inv-to-Sales Ratio (BOM Inv / Revenue): $(round(monthly_moments.avg_isr, digits=4))")
+println("Variance of log(1 + Inv-to-Sales Ratio): $(round(monthly_moments.var_log1p_isr, digits=4))")
+println("Average Gross Margin (Revenue / COGS): $(round(monthly_moments.avg_gross_margin, digits=4))")
 
 
 # ---------------------------------------------------

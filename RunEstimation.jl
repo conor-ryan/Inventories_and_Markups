@@ -77,7 +77,8 @@ ii_full = estimate_params_ii_full(params, target_moments,W;
                                                 start_guess.δ],
                                   max_iter = 500,
                                   seed     = 212311,
-                                  verbose  = true)
+                                  verbose  = true,
+                                  g_abstol=1e-1)
 
 println("\n=== True vs Estimated (full 7-parameter estimator) ===")
 println("Parameter   True          Estimated")
