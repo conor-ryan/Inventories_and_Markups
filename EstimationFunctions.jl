@@ -747,8 +747,9 @@ function compute_moments_on_grid(params_base::Parameters,
                 bar_len = 40
                 filled  = round(Int, bar_len * pct)
                 bar     = "=" ^ max(0, filled - 1) * ">" * " " ^ (bar_len - filled)
-                @printf("\r  [%s] %3.0f%%  %d/%d  (%.0fs elapsed, %.0fs ETA)   ",
-                        bar, 100.0 * pct, done, n_total, elapsed, eta)
+                fmt_hms = s -> @sprintf("%02d:%02d:%02d", floor(Int,s/3600), floor(Int,rem(s,3600)/60), floor(Int,rem(s,60)))
+                @printf("\r  [%s] %3.0f%%  %d/%d  (elapsed %s, ETA %s)   ",
+                        bar, 100.0 * pct, done, n_total, fmt_hms(elapsed), fmt_hms(eta))
                 flush(stdout)
                 done == n_total && println()
             end

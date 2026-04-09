@@ -9,13 +9,13 @@ params = Parameters(c=1.0, fc=0.0, μη=log(0.01),ση2=0.05,ρ_ω=0.1, γ=0.9,�
 
 
 # Build ~100 points near the baseline by varying only (ϵ, σν2, δ).
-ϵ_vals   = collect(range(4,  16,  length=4))
-σν2_vals = collect(range(0.09, 0.21, length=4))
-δ_vals   = collect(range(0.005,.025,length=4))
-μη_vals   = collect(range(log(0.001),log(0.05),length=4))
-γ_vals   = collect(range(0.5,0.9,length=4))
-ση2_vals   = collect(range(0.025,0.15,length=4))
-ρ_vals   = collect(range(0.1,0.9,length=4))
+ϵ_vals   = collect(range(4,  16,  length=3))
+σν2_vals = collect(range(0.09, 0.21, length=3))
+δ_vals   = collect(range(0.005,.025,length=3))
+μη_vals   = collect(range(log(0.01),log(0.1),length=3))
+γ_vals   = collect(range(0.7,1.1,length=3))
+ση2_vals   = collect(range(0.025,0.15,length=3))
+ρ_vals   = collect(range(0.1,0.5,length=3))
 
 
 param_vectors = Vector{Vector{Float64}}()
@@ -33,7 +33,7 @@ for ϵ_i in ϵ_vals, σν2_i in σν2_vals, δ_i in δ_vals, μη_i in μη_vals
     ])
 end
 
-# param_vectors = param_vectors[1:20]
+# param_vectors = param_vectors[1:100]
 
 println("Running parameter sweep with $(length(param_vectors)) points...")
 
@@ -43,12 +43,12 @@ df_out = compute_moments_on_grid(
     n_firms=40,
     n_years=10,
     seed=212311,
-    output_path="SimulatedData/moments_example_100.csv"
+    output_path="SimulatedData/moments.csv"
 )
 
 n_ok = sum(.!df_out.failed)
 println("Sweep complete. $(n_ok) / $(nrow(df_out)) points succeeded.")
-println("Saved: SimulatedData/moments_example_100.csv")
+println("Saved: SimulatedData/moments.csv")
 
 # Summary output
 fail_fraction = sum(df_out.failed) / nrow(df_out)
