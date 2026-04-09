@@ -429,7 +429,7 @@ function _simulate_all_moments(params::Parameters, ppi, opi,
     # isr_sim[t] = c·s_t/(p_t·D_t)  →  BOM/revenue ISR = s_t/(p_t·D_t) = isr_sim[t]/c
     # gross margin = p/c = s_t / (isr_sim[t]·D_t)   (requires D_t > 0)
     valid_mo = dem_sim .> 0
-    isr_mo   = isr_sim[valid_mo] ./ params.c
+    isr_mo   = isr_sim[valid_mo]
     gm_mo    = inv_sim[valid_mo] ./ (isr_sim[valid_mo] .* dem_sim[valid_mo])
     avg_isr_sim = mean(isr_mo)
     var_log1p_isr_sim = var(log1p.(isr_mo))

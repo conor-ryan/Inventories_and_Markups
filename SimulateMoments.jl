@@ -4,29 +4,15 @@ include("ModelFunctions.jl")
 include("EstimationFunctions.jl")
 
 # Baseline placeholders from SolveModel.jl (line 5).
-params_base = Parameters(
-    c=1.0,
-    fc=0.0,
-    μη=log(0.05),
-    ση2=0.05,
-    ρ_ω=0.1,
-    γ=0.6,
-    δ=0.05,
-    β=0.95,
-    ϵ=8.0,
-    μν=1,
-    σν2=0.09,
-    Smax=20,
-    Ns=200,
-    scale=1.0,
-    size=100
-)
+params = Parameters(c=1.0, fc=0.0, μη=log(0.01),ση2=0.05,ρ_ω=0.1, γ=0.9,δ=0.01, β=0.95, ϵ=8.0, μν=1, σν2=0.15, Smax=20, Ns=200,scale=1.0,size=100)
+
+
 
 # Build ~100 points near the baseline by varying only (ϵ, σν2, δ).
 ϵ_vals   = collect(range(4,  16,  length=4))
-σν2_vals = collect(range(0.09, 0.21, length=5))
-δ_vals   = collect(range(0.005,.025,length=5))
-μη_vals   = collect(range(log(0.001),log(0.05),length=5))
+σν2_vals = collect(range(0.09, 0.21, length=4))
+δ_vals   = collect(range(0.005,.025,length=4))
+μη_vals   = collect(range(log(0.001),log(0.05),length=4))
 
 param_vectors = Vector{Vector{Float64}}()
 sizehint!(param_vectors, length(ϵ_vals) * length(σν2_vals) * length(δ_vals))
@@ -36,10 +22,10 @@ for ϵ_i in ϵ_vals
         for δ_i in δ_vals
             for μη_i in μη_vals 
                 push!(param_vectors, [
-                    params_base.γ,
+                    params.γ,
                     μη_i,
-                    params_base.ση2,
-                    params_base.ρ_ω,
+                    params.ση2,
+                    params.ρ_ω,
                     σν2_i,
                     ϵ_i,
                     δ_i
@@ -49,10 +35,20 @@ for ϵ_i in ϵ_vals
     end
 end
 
+# param_vectors = [[
+#                     params.γ,
+#                     params.μη,
+#                     params.ση2,
+#                     params.ρ_ω,
+#                     params.σν2,
+#                     params.ϵ,
+#                     params.δ
+#                 ]]
+
 println("Running parameter sweep with $(length(param_vectors)) points...")
 
 df_out = compute_moments_on_grid(
-    params_base,
+    params,
     param_vectors;
     n_firms=40,
     n_years=10,

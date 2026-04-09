@@ -772,7 +772,7 @@ end
 # ---------------------------------------------------
 # Simulation of firm dynamics
 # ---------------------------------------------------
-function simulate_firm(num_simulations::Int, num_periods::Int, price_policy_interp, order_policy_interp, params)
+function simulate_firm(num_simulations::Int, num_periods::Int, price_policy_interp, order_policy_interp, params; burn_in::Int=100)
     """
     Simulate firm inventory dynamics over multiple periods and simulations.
     Returns vectors of beginning-of-period inventory, demand shocks, and demand levels.
@@ -790,6 +790,16 @@ function simulate_firm(num_simulations::Int, num_periods::Int, price_policy_inte
         # Random starting inventory; initial ω drawn from ergodic distribution
         s_current = rand(Sgrid)
         ω_idx     = draw_ω_index_ergodic(params)
+
+        for period in 1:burn_in
+            ω_current = params.ω_grid[ω_idx]
+            p_opt     = price_policy_interp(s_current, ω_current)
+            n_opt     = order_policy_interp(s_current, ω_current)
+            ν         = rand(params.dist)
+            D         = min(ν * p_opt^(-params.ϵ), s_current)
+            s_current = max((1 - params.δ) * (s_current - D + n_opt), 0.0)
+            ω_idx     = draw_ω_index(params, ω_idx)
+        end
 
         for period in 1:num_periods
             # Record beginning-of-period inventory
