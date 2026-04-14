@@ -35,7 +35,7 @@ echo "Memory: ${SLURM_MEM_PER_NODE:-unknown} MB per node"
 
 module load python
 
-python -m PythonEstimation.estimate_run \
+python -m PythonEstimation/estimate_run \
         --data-dir "$DATA_DIR" \
         --target-moments-file "$TARGET_MOMENTS_FILE" \
         --target-vcov-file "$TARGET_VCOV_FILE" \
