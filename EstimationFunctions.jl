@@ -284,6 +284,47 @@ end
             target_moments.γ_OLS, target_moments.ρ_ω, target_moments.σ_η2, target_moments.μ_η]
 end
 
+@inline function _full_ii_moment_names()
+    return (:avg_isr, :var_log1p_isr, :avg_gross_margin, :γ_OLS, :ρ_ω, :σ_η2, :μ_η)
+end
+
+"""
+    save_full_ii_moment_inputs(target_moments, bootstrap_vars; output_dir)
+
+Save the full-II target moments, bootstrap variances, and bootstrap covariance
+matrix as CSV files that can be reloaded later without the original simulated
+panel data.
+"""
+function save_full_ii_moment_inputs(target_moments::NamedTuple,
+                                    bootstrap_vars::NamedTuple;
+                                    output_dir::AbstractString)
+    mkpath(output_dir)
+
+    moment_names = collect(_full_ii_moment_names())
+    moment_labels = String.(moment_names)
+    target_vector = _full_ii_target_vector(target_moments)
+
+    df_moments = DataFrame(moment=moment_labels, value=target_vector)
+    CSV.write(joinpath(output_dir, "target_moments.csv"), df_moments)
+
+    df_variances = DataFrame(moment=moment_labels,
+                             variance=[bootstrap_vars.variances[name] for name in moment_names])
+    CSV.write(joinpath(output_dir, "target_moment_variances.csv"), df_variances)
+
+    df_vcov = DataFrame(moment=moment_labels)
+    for (j, name) in enumerate(moment_names)
+        df_vcov[!, String(name)] = bootstrap_vars.vcov[:, j]
+    end
+    CSV.write(joinpath(output_dir, "target_moment_vcov.csv"), df_vcov)
+
+    return (
+        moments_path = joinpath(output_dir, "target_moments.csv"),
+        variances_path = joinpath(output_dir, "target_moment_variances.csv"),
+        vcov_path = joinpath(output_dir, "target_moment_vcov.csv")
+    )
+end
+
+
 @inline function _full_ii_parameter_vector(params::Parameters)
     return [params.γ, params.μη, params.ση2, params.ρ_ω, params.σν2, params.ϵ, params.δ]
 end

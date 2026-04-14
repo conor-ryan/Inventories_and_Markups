@@ -101,7 +101,7 @@ struct Parameters
         demand_dist = LogNormal(μ, σ)
 
         # Create inventory state grid
-        Smax=quantile(demand_dist,0.9)*(ϵ - 1)/ϵ 
+        Smax=quantile(demand_dist,0.85)*(ϵ - 1)/ϵ 
         Sgrid_vec = collect(range(1e-4, Smax, length=Ns))
 
         new(c, fc, μη, ση2, ρ_ω, length(ω_grid_vec), ω_grid_vec, P_ω_mat, π_ω_vec,
