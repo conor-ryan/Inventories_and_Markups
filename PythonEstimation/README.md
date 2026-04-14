@@ -7,6 +7,7 @@ Python translation of the Julia indirect-inference workflow used by `Code/Estima
 - `model_functions.py`: translated model primitives, value-function solver, interpolation helpers, and simulation logic.
 - `estimation_functions.py`: translated moment construction, full indirect-inference objective, grid start selection, Jacobian, and asymptotic variance.
 - `estimate_run.py`: end-to-end runner that mirrors the Julia script `Code/Estimate_Run.jl` using saved moments and covariance files in `SimulatedData/`.
+- `profile_solve_model.py`: bottleneck/profiling script focused on `solve_model` with a candidate parameter vector and optional per-iteration value-function logs.
 
 ## Dependencies
 
@@ -22,6 +23,12 @@ From `Code/`:
 
 ```bash
 python -m PythonEstimation.estimate_run
+```
+
+Profile `solve_model` bottlenecks:
+
+```bash
+python -m PythonEstimation.profile_solve_model --verbose --ns 120 --maxiter 300 --profile-lines 30
 ```
 
 Optional filename/path overrides:

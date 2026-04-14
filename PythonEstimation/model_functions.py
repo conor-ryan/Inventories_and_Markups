@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+import time
 from typing import Optional
 
 import numpy as np
@@ -298,6 +299,7 @@ def solve_value_function(
     inv_h = (ns - 1) / (params.sgrid[-1] - params.sgrid[0])
     diff = np.inf
     it = 0
+    t0 = time.perf_counter()
 
     while diff > tol and it < maxiter:
         for j in range(n_omega):
@@ -318,9 +320,13 @@ def solve_value_function(
         diff = float(np.max(np.abs(v_by_omega_new - v_by_omega)))
         v_by_omega[:, :] = v_by_omega_new
         it += 1
+        if verbose:
+            elapsed = time.perf_counter() - t0
+            print(f"VFI iter={it:4d} diff={diff:12.6e} elapsed={elapsed:9.2f}s", flush=True)
 
     if verbose:
-        print(f"Initial value function solved in {it} iterations")
+        total = time.perf_counter() - t0
+        print(f"Initial value function solved in {it} iterations ({total:.2f}s)", flush=True)
 
     v = v_by_omega @ params.pi_omega
     converged = bool(diff <= tol)
