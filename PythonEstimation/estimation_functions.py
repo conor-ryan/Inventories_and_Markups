@@ -352,10 +352,10 @@ def estimate_params_ii_full(
     m_hat = _full_ii_target_vector(target_moments)
 
     if verbose:
-        print("\n=== Full II Estimation - Data Moments ===")
+        print("\n=== Full II Estimation - Data Moments ===", flush=True)
         for i, name in enumerate(MOMENT_NAMES):
-            print(f"  {name:16s} = {m_hat[i]:10.6f}")
-        print("\nStarting Nelder-Mead optimization")
+            print(f"  {name:16s} = {m_hat[i]:10.6f}", flush=True)
+        print("\nStarting Nelder-Mead optimization", flush=True)
 
     def unpack(x: np.ndarray) -> tuple[float, float, float, float, float, float, float]:
         gamma_n = float(np.clip(x[0], gamma_lb, gamma_ub))
@@ -390,11 +390,11 @@ def estimate_params_ii_full(
             sse = float(m @ (w @ m))
 
             if verbose:
-                print(f"iter {iter_count['n']:4d} obj={sse:12.6f} moments={np.round(m_tilde, 5)}")
+                print(f"iter {iter_count['n']:4d} obj={sse:12.6f} moments={np.round(m_tilde, 5)}", flush=True)
             return sse
         except Exception:
             if verbose:
-                print(f"iter {iter_count['n']:4d} model failed, penalty returned")
+                print(f"iter {iter_count['n']:4d} model failed, penalty returned", flush=True)
             return 1e10
 
     init_guess = np.asarray(init_guess, dtype=float)
@@ -425,16 +425,16 @@ def estimate_params_ii_full(
     gamma_est, mu_eta_est, sigma_eta2_est, rho_est, sigma_nu2_est, epsilon_est, delta_est = unpack(res.x)
 
     if verbose:
-        print("\n=== Full II Estimation Complete ===")
-        print(f"Converged : {res.success}")
-        print(f"gamma     : {gamma_est:10.6f}")
-        print(f"mu_eta    : {mu_eta_est:10.6f}")
-        print(f"sigma_eta2: {sigma_eta2_est:10.6f}")
-        print(f"rho_omega : {rho_est:10.6f}")
-        print(f"sigma_nu2 : {sigma_nu2_est:10.6f}")
-        print(f"epsilon   : {epsilon_est:10.6f}")
-        print(f"delta     : {delta_est:10.6f}")
-        print(f"Objective : {res.fun:.8f}")
+        print("\n=== Full II Estimation Complete ===", flush=True)
+        print(f"Converged : {res.success}", flush=True)
+        print(f"gamma     : {gamma_est:10.6f}", flush=True)
+        print(f"mu_eta    : {mu_eta_est:10.6f}", flush=True)
+        print(f"sigma_eta2: {sigma_eta2_est:10.6f}", flush=True)
+        print(f"rho_omega : {rho_est:10.6f}", flush=True)
+        print(f"sigma_nu2 : {sigma_nu2_est:10.6f}", flush=True)
+        print(f"epsilon   : {epsilon_est:10.6f}", flush=True)
+        print(f"delta     : {delta_est:10.6f}", flush=True)
+        print(f"Objective : {res.fun:.8f}", flush=True)
 
     return {
         "γ": gamma_est,
