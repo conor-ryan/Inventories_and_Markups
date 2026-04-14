@@ -6,8 +6,10 @@ from typing import Optional
 
 import numpy as np
 from scipy.optimize import minimize_scalar
-from scipy.special import expit
 from scipy.stats import norm
+
+
+SQRT_PI = float(np.sqrt(np.pi))
 
 
 def _tauchen_log_ar1(mu_log: float, rho: float, sigma_eta: float, q_omega: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -239,12 +241,49 @@ def _shock_specific_value_precomp(n: float, d: float, c: float, p: float, s_i: i
     return float(p * d - c - order_cost + params.beta * vinterp((1.0 - params.delta) * s_tilde))
 
 
-def _expected_value_choice_precomp(n: float, s_i: int, d_col: np.ndarray, c_col: np.ndarray, p: float, vinterp: UniformInterp, params: Parameters) -> float:
-    payoffs = np.array(
-        [_shock_specific_value_precomp(n, d_col[k], c_col[k], p, s_i, vinterp, params) for k in range(params.q)],
-        dtype=float,
-    )
-    return float(np.dot(params.quad_weights, payoffs) / np.sqrt(np.pi))
+def _uniform_interp_eval_array(values: np.ndarray, s_lo: float, inv_h: float, x: np.ndarray) -> np.ndarray:
+    t = (x - s_lo) * inv_h
+    n = values.size
+    out = np.empty_like(t, dtype=float)
+
+    left = t <= 0.0
+    right = t >= (n - 1)
+    mid = ~(left | right)
+
+    if np.any(left):
+        out[left] = values[0] + t[left] * (values[1] - values[0])
+    if np.any(right):
+        excess = t[right] - (n - 1)
+        out[right] = values[-1] + excess * (values[-1] - values[-2])
+    if np.any(mid):
+        t_mid = t[mid]
+        i = np.floor(t_mid).astype(np.int64)
+        alpha = t_mid - i
+        out[mid] = values[i] + alpha * (values[i + 1] - values[i])
+
+    return out
+
+
+def _expected_value_choice_precomp_fast(
+    n: float,
+    s_val: float,
+    d_col: np.ndarray,
+    base_profit_col: np.ndarray,
+    quad_weights: np.ndarray,
+    beta: float,
+    delta: float,
+    fixed_cost: float,
+    unit_cost: float,
+    vinterp_values: np.ndarray,
+    vinterp_s_lo: float,
+    vinterp_inv_h: float,
+) -> float:
+    s_tilde = s_val - d_col + n
+    x_next = (1.0 - delta) * s_tilde
+    v_next = _uniform_interp_eval_array(vinterp_values, vinterp_s_lo, vinterp_inv_h, x_next)
+    order_cost = fixed_cost + unit_cost * n if n > 0.0 else 0.0
+    payoffs = base_profit_col - order_cost + beta * v_next
+    return float(np.dot(quad_weights, payoffs) / SQRT_PI)
 
 
 def _maximize_expected_value_choice_precomp(
@@ -260,13 +299,52 @@ def _maximize_expected_value_choice_precomp(
     d_col = d_table[:, j, s_i]
     c_col = c_table[:, j, s_i]
     p = p_policy[s_i, j]
+    s_val = float(params.sgrid[s_i])
+    base_profit_col = p * d_col - c_col
 
-    obj = lambda n: -_expected_value_choice_precomp(float(n), s_i, d_col, c_col, p, vinterp, params)
-    res = minimize_scalar(obj, method="bounded", bounds=(0.0, float(n_upper)), options={"xatol": 1e-10, "maxiter": 500})
+    vw = params.quad_weights
+    beta = params.beta
+    delta = params.delta
+    fixed_cost = params.fc
+    unit_cost = params.c
+    vinterp_values = vinterp.values
+    vinterp_s_lo = vinterp.s_lo
+    vinterp_inv_h = vinterp.inv_h
+
+    def obj(n: float) -> float:
+        return -_expected_value_choice_precomp_fast(
+            float(n),
+            s_val,
+            d_col,
+            base_profit_col,
+            vw,
+            beta,
+            delta,
+            fixed_cost,
+            unit_cost,
+            vinterp_values,
+            vinterp_s_lo,
+            vinterp_inv_h,
+        )
+
+    res = minimize_scalar(obj, method="bounded", bounds=(0.0, float(n_upper)), options={"xatol": 1e-6, "maxiter": 200})
 
     n_opt = float(res.x)
     value_max = float(-res.fun)
-    no_order = _expected_value_choice_precomp(0.0, s_i, d_col, c_col, p, vinterp, params)
+    no_order = _expected_value_choice_precomp_fast(
+        0.0,
+        s_val,
+        d_col,
+        base_profit_col,
+        vw,
+        beta,
+        delta,
+        fixed_cost,
+        unit_cost,
+        vinterp_values,
+        vinterp_s_lo,
+        vinterp_inv_h,
+    )
 
     if value_max < no_order:
         return 0.0, no_order
