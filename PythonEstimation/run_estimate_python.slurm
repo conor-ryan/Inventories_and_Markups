@@ -16,8 +16,8 @@ set -euo pipefail
 PROJECT_DIR=${PROJECT_DIR:-$HOME/work/Research/CRW_Inventory_Competition}
 DATA_DIR=${DATA_DIR:-$PROJECT_DIR/SimulatedData}
 
-TARGET_MOMENTS_FILE=${TARGET_MOMENTS_FILE:-target_moments_001.csv}
-TARGET_VCOV_FILE=${TARGET_VCOV_FILE:-target_moment_vcov_001.csv}
+TARGET_MOMENTS_FILE=${TARGET_MOMENTS_FILE:-target_moments_id_001.csv}
+TARGET_VCOV_FILE=${TARGET_VCOV_FILE:-target_moment_vcov_id_001.csv}
 GRID_FILE=${GRID_FILE:-moments.csv}
 RESULTS_FILE=${RESULTS_FILE:-estimated_parameters_001.csv}
 
