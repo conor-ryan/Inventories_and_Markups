@@ -1,12 +1,7 @@
-using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Plots, Interpolations, Random, Statistics, DataFrames, GLM, Printf, CSV
+﻿using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Plots, Interpolations, Random, Statistics, DataFrames, GLM, Printf, CSV
 
 include("ModelFunctions.jl")
 include("EstimationFunctions.jl")
-
-# Baseline placeholders from SolveModel.jl (line 5).
-params = Parameters(c=1.0, fc=0.0, μη=log(0.01),ση2=0.05,ρ_ω=0.1, γ=0.9,δ=0.01, β=0.95, ϵ=8.0, μν=1, σν2=0.15, Ns=200,scale=1.0,size=100)
-
-
 
 # Parameter Bounds
 ϵ_bounds   = (4.0, 20.0)
@@ -17,7 +12,7 @@ params = Parameters(c=1.0, fc=0.0, μη=log(0.01),ση2=0.05,ρ_ω=0.1, γ=0.9,�
 ση2_bounds = (0.025, 0.15)
 ρ_bounds   = (0.0, 0.9)
 
-n_param_points = 500
+n_param_points = 2000
 param_bounds = [
     γ_bounds,
     μη_bounds,
@@ -35,7 +30,6 @@ param_vectors = halton_param_vectors(param_bounds, n_param_points; seed=212311)
 println("Running parameter sweep with $(length(param_vectors)) points...")
 
 df_out = compute_moments_on_grid(
-    params,
     param_vectors;
     n_firms=40,
     n_years=10,

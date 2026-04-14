@@ -31,7 +31,7 @@ struct Parameters
     Sgrid::Vector{Float64}
     size::Float64
 
-    function Parameters(; c=1.0, fc=0.0, μη=0.0, ση2=0.0, ρ_ω=0.9, γ=1.0, δ=0.2, β=0.95, ϵ=2.0, μν=100, σν2=2832, Q=19, Q_ω=7, scale=1.0, size=1.0,  Ns=800)
+    function Parameters(; c=1.0, μη=0.0, ση2=0.0, ρ_ω=0.9, γ=1.0, δ=0.2, ϵ=2.0, σν2=0.15, μν=1.0, β=0.95, fc=0.0,  Q=19, Q_ω=7, scale=1.0, size=100,  Ns=200)
                 
         x, w = gausshermite(Q)
         gl_x, gl_w = gausslegendre(Q)

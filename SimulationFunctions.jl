@@ -282,3 +282,38 @@ function bootstrap_moment_variances(df_monthly::DataFrame,
 end
 
 
+@inline function _full_ii_moment_names()
+    return (:avg_isr, :var_log1p_isr, :avg_gross_margin, :γ_OLS, :ρ_ω, :σ_η2, :μ_η)
+end
+
+"""
+    save_full_ii_moment_inputs(target_moments, bootstrap_vars; output_dir)
+
+Save the full-II target moments, bootstrap variances, and bootstrap covariance
+matrix as CSV files that can be reloaded later without the original simulated
+panel data.
+"""
+function save_full_ii_moment_inputs(target_moments::NamedTuple,
+                                    bootstrap_vars::NamedTuple;
+                                    output_dir::AbstractString)
+    mkpath(output_dir)
+
+    moment_names = collect(_full_ii_moment_names())
+    moment_labels = String.(moment_names)
+    target_vector = _full_ii_target_vector(target_moments)
+
+    df_moments = DataFrame(moment=moment_labels, value=target_vector)
+    CSV.write(joinpath(output_dir, "target_moments.csv"), df_moments)
+
+
+    df_vcov = DataFrame(moment=moment_labels)
+    for (j, name) in enumerate(moment_names)
+        df_vcov[!, String(name)] = bootstrap_vars.vcov[:, j]
+    end
+    CSV.write(joinpath(output_dir, "target_moment_vcov.csv"), df_vcov)
+
+    return (
+        moments_path = joinpath(output_dir, "target_moments.csv"),
+        vcov_path = joinpath(output_dir, "target_moment_vcov.csv")
+    )
+end

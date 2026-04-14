@@ -279,45 +279,10 @@ function compute_full_ii_target_moments(df_monthly::DataFrame,
 end
 
 
+
 @inline function _full_ii_target_vector(target_moments::NamedTuple)
     return [target_moments.avg_isr, target_moments.var_log1p_isr, target_moments.avg_gross_margin,
             target_moments.γ_OLS, target_moments.ρ_ω, target_moments.σ_η2, target_moments.μ_η]
-end
-
-@inline function _full_ii_moment_names()
-    return (:avg_isr, :var_log1p_isr, :avg_gross_margin, :γ_OLS, :ρ_ω, :σ_η2, :μ_η)
-end
-
-"""
-    save_full_ii_moment_inputs(target_moments, bootstrap_vars; output_dir)
-
-Save the full-II target moments, bootstrap variances, and bootstrap covariance
-matrix as CSV files that can be reloaded later without the original simulated
-panel data.
-"""
-function save_full_ii_moment_inputs(target_moments::NamedTuple,
-                                    bootstrap_vars::NamedTuple;
-                                    output_dir::AbstractString)
-    mkpath(output_dir)
-
-    moment_names = collect(_full_ii_moment_names())
-    moment_labels = String.(moment_names)
-    target_vector = _full_ii_target_vector(target_moments)
-
-    df_moments = DataFrame(moment=moment_labels, value=target_vector)
-    CSV.write(joinpath(output_dir, "target_moments.csv"), df_moments)
-
-
-    df_vcov = DataFrame(moment=moment_labels)
-    for (j, name) in enumerate(moment_names)
-        df_vcov[!, String(name)] = bootstrap_vars.vcov[:, j]
-    end
-    CSV.write(joinpath(output_dir, "target_moment_vcov.csv"), df_vcov)
-
-    return (
-        moments_path = joinpath(output_dir, "target_moments.csv"),
-        vcov_path = joinpath(output_dir, "target_moment_vcov.csv")
-    )
 end
 
 
@@ -555,9 +520,9 @@ function estimate_params_ii_full(target_moments::NamedTuple,init_guess::Abstract
         @printf("  ρ_ω   (annual)   = %10.6f\n", m̂[5])
         @printf("  σ_η2  (annual)   = %10.6f\n", m̂[6])
         @printf("  μ_η   (annual)   = %10.6f\n", m̂[7])
-        println("\nStarting Nelder-Mead over (γ, μη, log σ²η, arctanh ρω, log σν, ϵ, logit δ)...")
-        println("\n iter │    γ    │    μη   │   σ²η   │    ρω   │    σν   │    ϵ    │    δ    │   obj")
-        println("──────┼─────────┼─────────┼─────────┼─────────┼─────────┼─────────┼─────────┼──────────")
+        println("\nStarting Nelder-Mead. Iteration output shows simulated moments and objective.")
+        println("\n iter │ avg_isr │ var_log1p │ avg_gm  │  γ_OLS  │   ρ_ω   │   σ_η2  │   μ_η   │   obj")
+        println("──────┼─────────┼───────────┼─────────┼─────────┼─────────┼─────────┼─────────┼──────────")
     end
 
     iter_count = Ref(0)
@@ -588,8 +553,8 @@ function estimate_params_ii_full(target_moments::NamedTuple,init_guess::Abstract
             sse = dot(M, W * M)
 
             if verbose
-                @printf("  %4d │ %7.4f │ %7.4f │ %7.5f │ %7.4f │ %7.4f │ %7.3f │ %7.4f │ %9.5f\n",
-                        iter_count[], γ_n, μη_n, ση2_n, ρω_n, σν2_n, ϵ_n, δ_n, sse)
+                @printf("  %4d │ %7.4f │ %9.4f │ %7.4f │ %7.4f │ %7.4f │ %7.4f │ %7.4f │ %9.5f\n",
+                    iter_count[], m̃[1], m̃[2], m̃[3], m̃[4], m̃[5], m̃[6], m̃[7], sse)
             end
             return sse
         catch
@@ -619,12 +584,12 @@ function estimate_params_ii_full(target_moments::NamedTuple,init_guess::Abstract
                              Optim.Options(iterations=max_iter, show_trace=false,
                                            x_abstol=1e-4, g_abstol=g_abstol))
 
-    γ̂, μη_est, ση2_est, ρω_est, σν2_est, ϵ_est, δ_est = unpack(Optim.minimizer(result))
+    γ, μη_est, ση2_est, ρω_est, σν2_est, ϵ_est, δ_est = unpack(Optim.minimizer(result))
 
     if verbose
         println("\n=== Full II Estimation Complete ===")
         println("  Converged : $(Optim.converged(result))")
-        @printf("  γ̂         = %10.6f\n", γ̂)
+        @printf("  γ̂         = %10.6f\n", γ)
         @printf("  μ̂η        = %10.6f\n", μη_est)
         @printf("  σ̂²η       = %10.6f\n", ση2_est)
         @printf("  ρ̂ω        = %10.6f\n", ρω_est)
@@ -634,8 +599,8 @@ function estimate_params_ii_full(target_moments::NamedTuple,init_guess::Abstract
         println("  Objective : $(round(Optim.minimum(result), digits=8))")
     end
 
-    return (γ̂=γ̂, μη=μη_est, ση2=ση2_est, ρω=ρω_est,
-            σν2=σν2_est, ϵ̂=ϵ_est, δ̂=δ_est,
+    return (γ=γ, μη=μη_est, ση2=ση2_est, ρω=ρω_est,
+            σν2=σν2_est, ϵ=ϵ_est, δ=δ_est,
             obj_value=Optim.minimum(result), result=result)
 end
 
@@ -656,8 +621,6 @@ For every parameter vector, the function solves the model, simulates
 Start Julia with `julia --threads=N` (or set the environment variable
 `JULIA_NUM_THREADS=N`) to exploit multiple cores.
 
-- `params_base`   : `Parameters` object; `c`, `fc`, `β`, `μν`, `Smax`, `Ns`
-                    are held fixed at their values here.
 - `param_vectors` : Vector of vectors, one per evaluation point, each with 7
                     entries in the order `[γ, μη, ση2, ρω, σν2, ϵ, δ]`.
 - `n_firms`       : Firms simulated per parameter vector.
@@ -671,8 +634,7 @@ A `DataFrame` with parameter columns `γ, μη, ση2, ρω, σν, ϵ, δ` and m
 columns `avg_isr, var_log1p_isr, avg_gross_margin, γ̂_OLS, ρ̂_ω, σ̂_η2, μ̂_η, failed`.
 `failed = true` indicates the model could not be solved at those parameters.
 """
-function compute_moments_on_grid(params_base::Parameters,
-                                  param_vectors::AbstractVector{<:AbstractVector{<:Real}};
+function compute_moments_on_grid(param_vectors::AbstractVector{<:AbstractVector{<:Real}};
                                   n_firms::Int              = 5000,
                                   n_years::Int              = 20,
                                   seed::Int                 = 212311,
@@ -691,8 +653,6 @@ function compute_moments_on_grid(params_base::Parameters,
                      Float64(p[5]), Float64(p[6]), Float64(p[7]))
     end
 
-    # Fixed level mean of ν (stored directly in params_base.μν)
-    μν_level = params_base.μν
 
     @printf("Parameter sweep: %d total points  (%d threads available)\n",
             n_total, Threads.nthreads())
@@ -736,19 +696,13 @@ function compute_moments_on_grid(params_base::Parameters,
 
         try
             params_i = Parameters(
-                c    = params_base.c,
-                fc   = params_base.fc,
                 μη   = μη_i,
                 ση2  = ση2_i,
                 ρ_ω  = ρω_i,
                 γ    = γ_i,
                 δ    = δ_i,
-                β    = params_base.β,
                 ϵ    = ϵ_i,
-                μν   = μν_level,
-                σν2  = σν2_i,
-                Ns   = params_base.Ns,
-                size = params_base.size)
+                σν2  = σν2_i)
 
             _, _, _, _, ppi, opi, _, converged_i = solve_model(params_i,maxiter=max_value_iterations)
             !converged_i && error("value function did not converge")
