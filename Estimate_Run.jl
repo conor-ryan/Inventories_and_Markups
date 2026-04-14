@@ -6,8 +6,8 @@ include("EstimationFunctions.jl")
 
 
 out_dir = joinpath(@__DIR__, "..", "SimulatedData")
-target_moments_path = joinpath(out_dir, "target_moments.csv")
-target_vcov_path = joinpath(out_dir, "target_moment_vcov.csv")
+target_moments_path = joinpath(out_dir, "target_moments_id_001.csv")
+target_vcov_path = joinpath(out_dir, "target_moment_vcov_id_001.csv")
 grid_path = joinpath(out_dir, "moments.csv")
 results_path = joinpath(out_dir, "estimated_parameters.csv")
 seed = 212311

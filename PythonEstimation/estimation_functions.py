@@ -266,7 +266,7 @@ def compute_full_ii_asymptotic_variance(
         solve_maxiter=solve_maxiter,
     )
     wf = np.asarray(w, dtype=float)
-    avar = np.linalg.inv(gf.T @ wf @ gf)
+    avar = np.linalg.inv(gf @ wf @ gf.T)
     vcov = avar / float(sample_size)
     se = np.sqrt(np.diag(vcov))
 

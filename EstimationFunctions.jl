@@ -383,7 +383,7 @@ function compute_full_ii_asymptotic_variance(params_base::Parameters,
                                   seed=seed,
                                   solve_maxiter=solve_maxiter)
     Wf = Matrix{Float64}(W)
-    avar = inv(Gf' * Wf * Gf)
+    avar = inv(Gf * Wf * Gf')
     vcov = avar / sample_size
     se = sqrt.(diag(vcov))
 
