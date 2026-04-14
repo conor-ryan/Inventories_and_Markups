@@ -31,9 +31,12 @@ struct Parameters
     Sgrid::Vector{Float64}
     size::Float64
 
-    function Parameters(; c=1.0, fc=0.0, μη=0.0, ση2=0.0, ρ_ω=0.9, γ=1.0, δ=0.2, β=0.95, ϵ=2.0, μν=100, σν2=2832, Q=19, Q_ω=7, scale=1.0, size=1.0, Smax=50.0, Ns=800)
+    function Parameters(; c=1.0, fc=0.0, μη=0.0, ση2=0.0, ρ_ω=0.9, γ=1.0, δ=0.2, β=0.95, ϵ=2.0, μν=100, σν2=2832, Q=19, Q_ω=7, scale=1.0, size=1.0,  Ns=800)
+                
         x, w = gausshermite(Q)
         gl_x, gl_w = gausslegendre(Q)
+        
+
 
         scale_parameter = scale^(ϵ)
         c = c * scale
@@ -91,17 +94,47 @@ struct Parameters
             π_ω_vec ./= sum(π_ω_vec)
         end
 
-        # Create inventory state grid
-        Sgrid_vec = collect(range(1e-4, Smax, length=Ns))
+
 
         μν = μν / (scale_parameter * size)
         σν2 = σν2 / (scale_parameter^2 * size^2)
+        demand_dist = LogNormal(μ, σ)
+
+        # Create inventory state grid
+        Smax=quantile(demand_dist,0.9)*(ϵ - 1)/ϵ 
+        Sgrid_vec = collect(range(1e-4, Smax, length=Ns))
 
         new(c, fc, μη, ση2, ρ_ω, length(ω_grid_vec), ω_grid_vec, P_ω_mat, π_ω_vec,
-            γ, δ, β, ϵ, μν, σν2, LogNormal(μ, σ), Q, x, w, x_lognormal, gl_x, gl_w, Smax, Ns, Sgrid_vec,size)
+            γ, δ, β, ϵ, μν, σν2,demand_dist , Q, x, w, x_lognormal, gl_x, gl_w, Smax, Ns, Sgrid_vec,size)
     end
 end
 
+"""
+    solve_model(params; verbose=false)
+    
+Solve the complete model: price policy, value function, and order policy.
+Returns (p_policy, order_policy, V, price_policy_interp, order_policy_interp, Vinterp)
+"""
+function solve_model(params; full=false, verbose=false,fast_interp=true,maxiter=1000)
+    Sgrid  = params.Sgrid
+    ω_grid = params.ω_grid
+    Nω     = params.Q_ω
+
+    if verbose
+        println("Solving value function...")
+    end
+    V, order_policy, p_policy, V_by_omega, converged = solve_value_function(params, full=full,fast_interp=fast_interp,maxiter=maxiter)
+
+    price_policy_interp_nodes, order_policy_interp_nodes =
+        build_fast_policy_interpolants(Sgrid, p_policy, order_policy)
+
+    price_policy_interp = OmegaPolicyInterp(price_policy_interp_nodes, ω_grid)
+    order_policy_interp = OmegaPolicyInterp(order_policy_interp_nodes, ω_grid)
+
+    Vinterp = LinearInterpolation(Sgrid, V, extrapolation_bc=Line())
+
+    return p_policy, order_policy, V, V_by_omega, price_policy_interp, order_policy_interp, Vinterp, converged
+end
 
 """
     UniformInterp
@@ -458,6 +491,19 @@ Compute the stockout probability given inventory s and price p.
 function stockout_probability(s, p, params)
     νbar = s * p^params.ϵ
     return 1.0 - cdf(params.dist, νbar)
+end
+
+
+"""
+    inventory_for_stockout_probability(p, params, prob)
+
+Compute the inventory level that implies stockout probability `prob`
+given price `p`.
+"""
+function inventory_for_stockout_probability(p, params, prob)
+
+    νbar = quantile(params.dist, 1.0 - prob)
+    return νbar / p^params.ϵ
 end
 
 

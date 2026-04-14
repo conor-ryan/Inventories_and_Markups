@@ -2,7 +2,8 @@ using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Plots, Interpola
 include("ModelFunctions.jl")
 include("EstimationFunctions.jl")
 
-params = Parameters(c=1.0, fc=0.0, μη=log(0.01),ση2=0.05,ρ_ω=0.1, γ=0.9,δ=0.01, β=0.95, ϵ=8.0, μν=1, σν2=0.15, Smax=20, Ns=200,scale=1.0,size=100)
+Ns = 200
+params = Parameters(c=1.0, fc=0.0, μη=log(0.01),ση2=0.05,ρ_ω=0.1, γ=0.9,δ=0.01, β=0.95, ϵ=8.0, μν=1, σν2=0.15,Ns=Ns,scale=1.0,size=100.0)
 
 
 # # ---------------------------------------------------
@@ -20,9 +21,7 @@ params = Parameters(c=1.0, fc=0.0, μη=log(0.01),ση2=0.05,ρ_ω=0.1, γ=0.9,�
 # Profile.print(sortedby=:count, mincount=25)
 # # ---------------------------------------------------
 
-Sgrid = params.Sgrid
-Smax = params.Smax
-Ns = params.Ns
+
 
 # # Solve model using ModelFunctions
 # println("Solving price policy...")
@@ -57,7 +56,8 @@ j_high = Q
 stockouts = zeros(Ns)
 stockouts_by_omega = zeros(Ns, Q)
 value_derivative = zeros(Ns)
-for (i, s) in enumerate(Sgrid)
+Smax = maximum(params.Sgrid)
+for (i, s) in enumerate(params.Sgrid)
     stockouts[i] = sum(ω_weights[j] * stockout_probability(s, p_policy[i, j], params) for j in eachindex(ω_nodes))
     for j in 1:Q
         stockouts_by_omega[i, j] = stockout_probability(s, p_policy[i, j], params)
@@ -70,7 +70,8 @@ end
 println("Running simulation...")
 Random.seed!(212311)  # Set seed for reproducibility
 _n_periods = 25000   
-inventory_sim, demand_shocks_sim, demand_levels_sim, inv_eop_sim, expense_sim, ω_sim, inv_sales_ratio_sim = simulate_firm(40, _n_periods, price_policy_interp, order_policy_interp, params)
+inventory_sim, demand_levels_sim, expense_sim, revenue_sim = simulate_firm(40, _n_periods, price_policy_interp, order_policy_interp, params)
+inv_sales_ratio_sim = inventory_sim./revenue_sim
 println("Simulation complete. $(length(inventory_sim)) observations recorded.")
 
 # Compute monthly moments using the existing EstimationFunctions helper
@@ -79,7 +80,7 @@ revenue_sim = params.c .* inventory_sim ./ inv_sales_ratio_sim
 df_monthly_sim = DataFrame(
     inv_to_sales = inv_sales_ratio_sim ./ params.c,
     revenue = revenue_sim,
-    cogs = expense_sim
+    cogs = demand_levels_sim
 )
 monthly_moments = compute_monthly_moments(df_monthly_sim)
 println("Monthly moments complete.")
@@ -105,6 +106,7 @@ println("Average Gross Margin (Revenue / COGS): $(round(monthly_moments.avg_gros
 # )
 
 # Create combined subplot figure
+Sgrid = params.Sgrid
 p1 = plot(Sgrid[2:end], [p_policy_integrated[2:end] p_policy[2:end, j_low] p_policy[2:end, j_med] p_policy[2:end, j_high]],
     xlabel="Inventory Level (s)", ylabel="Price", title="Pricing Policy",
     label=ω_slice_labels, linewidth=2, linestyle=[:solid :dash :dot :dashdot])

@@ -89,3 +89,27 @@ println("Parameter   True          Estimated")
 @printf("σν2         %10.6f    %10.6f\n", params.σν2, ii_full.σν2)
 @printf("ϵ           %10.6f    %10.6f\n", params.ϵ, ii_full.ϵ̂)
 @printf("δ           %10.6f    %10.6f\n", params.δ, ii_full.δ̂)
+
+params_hat = Parameters(c=params.c, fc=params.fc,
+                        μη=ii_full.μη, ση2=ii_full.ση2, ρ_ω=ii_full.ρω, γ=ii_full.γ̂,
+                        δ=ii_full.δ̂, β=params.β, ϵ=ii_full.ϵ̂,
+                        μν=params.μν, σν2=ii_full.σν2,
+                        Smax=params.Smax, Ns=params.Ns,
+                        scale=1.0, size=params.size)
+
+se_results = compute_full_ii_asymptotic_variance(params_hat, W;
+                                                 n_firms=5000,
+                                                 n_years=20,
+                                                 seed=212311,
+                                                 solve_maxiter=1000,
+                                                 sample_size=1000)
+
+println("\n=== Asymptotic Standard Errors ===")
+println("Parameter   Estimate       Std. Error")
+@printf("γ           %10.6f    %10.6f\n", ii_full.γ̂, se_results.se[1])
+@printf("μη          %10.6f    %10.6f\n", ii_full.μη, se_results.se[2])
+@printf("ση2         %10.6f    %10.6f\n", ii_full.ση2, se_results.se[3])
+@printf("ρω          %10.6f    %10.6f\n", ii_full.ρω, se_results.se[4])
+@printf("σν2         %10.6f    %10.6f\n", ii_full.σν2, se_results.se[5])
+@printf("ϵ           %10.6f    %10.6f\n", ii_full.ϵ̂, se_results.se[6])
+@printf("δ           %10.6f    %10.6f\n", ii_full.δ̂, se_results.se[7])

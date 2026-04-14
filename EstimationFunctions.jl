@@ -215,6 +215,7 @@ function _simulate_all_moments(params::Parameters, ppi, opi,
 
     inv_sim, dem_sim, exp_sim, rev_sim =
         simulate_firm(rng, n_firms, n_months, ppi, opi, params)
+    any_inventory_above_grid = any(inv_sim .> params.Smax)
 
     # Monthly moments
     valid_mo = (dem_sim .> 0) .& (rev_sim .> 0)
@@ -249,8 +250,9 @@ function _simulate_all_moments(params::Parameters, ppi, opi,
                        total_opex=tot_opex, total_sales=tot_sales)
     ψ̃_ann = compute_annual_auxiliary(df_ann)
 
-            return (avg_isr=avg_isr_sim, var_log1p_isr=var_log1p_isr_sim, avg_gross_margin=avg_gm_sim,
-                γ_OLS=ψ̃_ann.γ_OLS, ρ_ω=ψ̃_ann.ρ_ω, σ_η2=ψ̃_ann.σ_η2, μ_η=ψ̃_ann.μ_η)
+    return (avg_isr=avg_isr_sim, var_log1p_isr=var_log1p_isr_sim, avg_gross_margin=avg_gm_sim,
+            γ_OLS=ψ̃_ann.γ_OLS, ρ_ω=ψ̃_ann.ρ_ω, σ_η2=ψ̃_ann.σ_η2, μ_η=ψ̃_ann.μ_η,
+            any_inventory_above_grid=any_inventory_above_grid)
 end
 
 
@@ -682,6 +684,7 @@ function compute_moments_on_grid(params_base::Parameters,
     out_σ_η2     = fill(NaN, n_total)
     out_μη_ar1   = fill(NaN, n_total)
     out_failed   = fill(true, n_total)
+    out_inventory_above_grid = fill(false, n_total)
 
     # --- Progress tracking --------------------------------------------------
     counter    = Threads.Atomic{Int}(0)
@@ -730,6 +733,7 @@ function compute_moments_on_grid(params_base::Parameters,
             out_ρω_ar1[idx]   = m̃.ρ_ω
             out_σ_η2[idx]     = m̃.σ_η2
             out_μη_ar1[idx]   = m̃.μ_η
+            out_inventory_above_grid[idx] = m̃.any_inventory_above_grid
             out_failed[idx]   = false
         catch
             # Leave NaN outputs and failed = true
@@ -770,12 +774,16 @@ function compute_moments_on_grid(params_base::Parameters,
         ρ_ω              = out_ρω_ar1,
         σ_η2             = out_σ_η2,
         μ_η              = out_μη_ar1,
+        any_inventory_above_grid = out_inventory_above_grid,
         failed           = out_failed)
 
     CSV.write(output_path, df_out)
     n_ok = sum(.!out_failed)
-    @printf("\nGrid search complete.  %d / %d points succeeded.  Results → %s\n",
+        frac_inventory_above_grid = n_ok > 0 ? mean(out_inventory_above_grid[.!out_failed]) : NaN
+        @printf("\nGrid search complete.  %d / %d points succeeded.  Results → %s\n",
             n_ok, n_total, output_path)
+        @printf("Fraction of successful runs with any simulated inventory above Smax: %.6f\n",
+            frac_inventory_above_grid)
 
     return df_out
 end
