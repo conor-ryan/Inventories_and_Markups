@@ -56,7 +56,7 @@ def run(argv: list[str] | None = None) -> None:
     if not (df_target_moments["moment"].tolist() == moment_labels and df_target_vcov["moment"].tolist() == moment_labels):
         raise RuntimeError("target moments file has unexpected moment ordering")
 
-    target_moments = {name: float(value) for name, value in zip(moment_labels, df_target_moments["value"].to_numpy(dtype=float), strict=True)}
+    target_moments = {name: float(value) for name, value in zip(moment_labels, df_target_moments["value"].to_numpy(dtype=float))}
 
     vcov = np.zeros((len(moment_labels), len(moment_labels)), dtype=float)
     for j, name in enumerate(moment_labels):
