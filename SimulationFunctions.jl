@@ -1,4 +1,4 @@
-using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Interpolations,
+﻿using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Interpolations,
       Random, Statistics, DataFrames
 """
     simulate_panel_data(params;
@@ -275,18 +275,7 @@ function bootstrap_moment_variances(df_monthly::DataFrame,
     ]...)'
     vcov = cov(moment_matrix)
 
-    variances = (
-        avg_isr = vcov[1, 1],
-        var_log1p_isr = vcov[2, 2],
-        avg_gross_margin = vcov[3, 3],
-        γ_OLS = vcov[4, 4],
-        ρ_ω = vcov[5, 5],
-        σ_η2 = vcov[6, 6],
-        μ_η = vcov[7, 7]
-    )
-
     return (
-        variances = variances,
         vcov = vcov,
         moment_names = moment_names
     )

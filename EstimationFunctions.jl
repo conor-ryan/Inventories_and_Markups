@@ -1,4 +1,4 @@
-"""
+﻿"""
     estimate_omega_ar1(log_ω_proxy, firm_boundary)
 
 Fit an AR(1) to a panel of log(ω) proxies and return the log-mean, innovation
@@ -307,9 +307,6 @@ function save_full_ii_moment_inputs(target_moments::NamedTuple,
     df_moments = DataFrame(moment=moment_labels, value=target_vector)
     CSV.write(joinpath(output_dir, "target_moments.csv"), df_moments)
 
-    df_variances = DataFrame(moment=moment_labels,
-                             variance=[bootstrap_vars.variances[name] for name in moment_names])
-    CSV.write(joinpath(output_dir, "target_moment_variances.csv"), df_variances)
 
     df_vcov = DataFrame(moment=moment_labels)
     for (j, name) in enumerate(moment_names)
@@ -319,7 +316,6 @@ function save_full_ii_moment_inputs(target_moments::NamedTuple,
 
     return (
         moments_path = joinpath(output_dir, "target_moments.csv"),
-        variances_path = joinpath(output_dir, "target_moment_variances.csv"),
         vcov_path = joinpath(output_dir, "target_moment_vcov.csv")
     )
 end
@@ -491,7 +487,7 @@ end
 
 
 """
-    estimate_params_ii_full(params_base, target_moments; weighting_matrix, ...)
+    estimate_params_ii_full(target_moments, init_guess, W; ...)
 
 Indirect inference estimator for all seven estimable structural parameters:
 
@@ -518,16 +514,19 @@ where `M(θ) = m̂ − m̃(θ)` and `W` is a required 7×7 weighting matrix.
 Minimised via Nelder-Mead over the unconstrained reparameterisation
 `(γ, log μω, log σω2, arctanh ρω, log σν, ϵ, logit δ)`.
 
-The level mean of ν (μν) is held fixed at its value in `params_base`.
+`init_guess` must be a length-7 vector ordered as
+`[γ, μη, ση2, ρω, σν2, ϵ, δ]`.
+
+Fixed parameters not estimated here are taken from `Parameters()` constructor
+defaults.
 `target_moments` must be a NamedTuple with fields:
 `avg_isr, var_log1p_isr, avg_gross_margin, γ_OLS, ρ_ω, σ_η2, μ_η`.
 
 # Returns
-Named tuple with fields `γ̂`, `μη`, `ση2`, `ρω`, `σν`, `ϵ̂`, `δ̂`,
+Named tuple with fields `γ̂`, `μη`, `ση2`, `ρω`, `σν2`, `ϵ̂`, `δ̂`,
 `obj_value`, `result`.
 """
-function estimate_params_ii_full(params_base::Parameters,
-                                  target_moments::NamedTuple,
+function estimate_params_ii_full(target_moments::NamedTuple,init_guess::AbstractVector{<:Real},
                                   W::AbstractMatrix{<:Real};
                                   n_firms::Int   = 200,
                                   n_years::Int   = 50,
@@ -538,7 +537,6 @@ function estimate_params_ii_full(params_base::Parameters,
                                   σν2_lb::Float64 = 1e-6,  σν2_ub::Float64 = 5.0,
                                   ϵ_lb::Float64  = 1.1,   ϵ_ub::Float64  = 20.0,
                                   δ_lb::Float64  = 0.001, δ_ub::Float64  = 0.999,
-                                  init_guess::Union{Nothing,AbstractVector{<:Real}} = nothing,
                                   seed::Int      = 212311,
                                   max_iter::Int  = 1000,
                                   verbose::Bool  = true,
@@ -579,12 +577,9 @@ function estimate_params_ii_full(params_base::Parameters,
         iter_count[] += 1
         γ_n, μη_n, ση2_n, ρω_n, σν2_n, ϵ_n, δ_n = unpack(x)
         try
-            params_iter = Parameters(c=params_base.c, fc=params_base.fc,
-                                      μη=μη_n, ση2=ση2_n, ρ_ω=ρω_n, γ=γ_n,
-                                      δ=δ_n, β=params_base.β, ϵ=ϵ_n,
-                                      μν=params_base.μν, σν2=σν2_n,
-                                      Ns=params_base.Ns,
-                                      size=params_base.size)
+            params_iter = Parameters(μη=μη_n, ση2=ση2_n, ρ_ω=ρω_n, γ=γ_n,
+                                      δ=δ_n,  ϵ=ϵ_n,
+                                      σν2=σν2_n)
             _, _, _, _, ppi, opi, _, _ = solve_model(params_iter)
             m̃_nt = _simulate_all_moments(params_iter, ppi, opi, n_firms, n_years, seed)
             m̃ = [m̃_nt.avg_isr, m̃_nt.var_log1p_isr, m̃_nt.avg_gross_margin,
@@ -604,17 +599,12 @@ function estimate_params_ii_full(params_base::Parameters,
     end
 
     # Initial point from params_base or user-supplied guess [γ, μη, ση2, ρω, σν2, ϵ, δ]
-    if isnothing(init_guess)
-        γ_init, μη_init, ση2_init, ρω_init, σν2_init, ϵ_init, δ_init =
-            params_base.γ, params_base.μη, params_base.ση2,
-            params_base.ρ_ω, params_base.σν2, params_base.ϵ, params_base.δ
-    else
-        length(init_guess) == 7 || error("init_guess must have length 7: [γ, μη, ση2, ρω, σν2, ϵ, δ]")
-        γ_init, μη_init, ση2_init, ρω_init, σν2_init, ϵ_init, δ_init =
-            Float64(init_guess[1]), Float64(init_guess[2]), Float64(init_guess[3]),
-            Float64(init_guess[4]), Float64(init_guess[5]), Float64(init_guess[6]),
-            Float64(init_guess[7])
-    end
+
+    length(init_guess) == 7 || error("init_guess must have length 7: [γ, μη, ση2, ρω, σν2, ϵ, δ]")
+    γ_init, μη_init, ση2_init, ρω_init, σν2_init, ϵ_init, δ_init =
+        Float64(init_guess[1]), Float64(init_guess[2]), Float64(init_guess[3]),
+        Float64(init_guess[4]), Float64(init_guess[5]), Float64(init_guess[6]),
+        Float64(init_guess[7])
 
     x0 = [clamp(γ_init,               γ_lb,  γ_ub),
           clamp(μη_init,              μη_lb, μη_ub),
@@ -648,7 +638,6 @@ function estimate_params_ii_full(params_base::Parameters,
             σν2=σν2_est, ϵ̂=ϵ_est, δ̂=δ_est,
             obj_value=Optim.minimum(result), result=result)
 end
-
 
 """
     compute_moments_on_grid(params_base, param_vectors;

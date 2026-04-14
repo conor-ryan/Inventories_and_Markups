@@ -1,4 +1,4 @@
-using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Interpolations,
+﻿using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Interpolations,
       Random, Statistics, DataFrames, CSV, GLM, FixedEffectModels, Printf
 
 include("ModelFunctions.jl")
@@ -69,12 +69,13 @@ start_guess = select_best_grid_start(df_grid, target_moments,W)
         start_guess.σν2, start_guess.ϵ, start_guess.δ)
 
 println("\n=== Estimating all 7 parameters via Full Indirect Inference ===")
-ii_full = estimate_params_ii_full(params, target_moments,W;
+ii_full = estimate_params_ii_full(target_moments,
+                                  [start_guess.γ, start_guess.μη, start_guess.ση2,
+                                   start_guess.ρω, start_guess.σν2, start_guess.ϵ,
+                                   start_guess.δ],
+                                  W;
                                   n_firms  = 5000,
                                   n_years  = 20,
-                                  init_guess = [start_guess.γ, start_guess.μη, start_guess.ση2,
-                                                start_guess.ρω, start_guess.σν2, start_guess.ϵ,
-                                                start_guess.δ],
                                   max_iter = 500,
                                   seed     = 212311,
                                   verbose  = true,

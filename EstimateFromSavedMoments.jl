@@ -1,12 +1,9 @@
-using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Interpolations,
+﻿using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Interpolations,
       Random, Statistics, DataFrames, CSV, GLM, FixedEffectModels, Printf
 
 include("ModelFunctions.jl")
 include("EstimationFunctions.jl")
 
-params_base = Parameters(c=1.0, fc=0.0, μη=log(0.05), ση2=0.05, ρ_ω=0.2, γ=0.9,
-                         δ=0.01, β=0.95, ϵ=6.0, μν=1, σν2=0.09,
-                         Ns=200, scale=1.0, size=100)
 
 out_dir = joinpath(@__DIR__, "..", "SimulatedData")
 target_moments_path = joinpath(out_dir, "target_moments.csv")
@@ -34,23 +31,21 @@ println("Selecting initial guess from precomputed grid...")
 start_guess = select_best_grid_start(df_grid, target_moments, W)
 
 println("Estimating parameters...")
-ii_full = estimate_params_ii_full(params_base, target_moments, W;
+ii_full = estimate_params_ii_full(target_moments,
+                                  [start_guess.γ, start_guess.μη, start_guess.ση2,
+                                   start_guess.ρω, start_guess.σν2, start_guess.ϵ,
+                                   start_guess.δ],
+                                  W;
                                   n_firms=5000,
                                   n_years=20,
-                                  init_guess=[start_guess.γ, start_guess.μη, start_guess.ση2,
-                                              start_guess.ρω, start_guess.σν2, start_guess.ϵ,
-                                              start_guess.δ],
                                   max_iter=500,
                                   seed=seed,
                                   verbose=true,
                                   g_abstol=1e-1)
 
-params_hat = Parameters(c=params_base.c, fc=params_base.fc,
-                        μη=ii_full.μη, ση2=ii_full.ση2, ρ_ω=ii_full.ρω, γ=ii_full.γ̂,
-                        δ=ii_full.δ̂, β=params_base.β, ϵ=ii_full.ϵ̂,
-                        μν=params_base.μν, σν2=ii_full.σν2,
-                        Ns=params_base.Ns,
-                        scale=1.0, size=params_base.size)
+params_hat = Parameters(μη=ii_full.μη, ση2=ii_full.ση2, ρ_ω=ii_full.ρω, γ=ii_full.γ̂,
+                        δ=ii_full.δ̂, ϵ=ii_full.ϵ̂,
+                        σν2=ii_full.σν2)
 
 println("Computing standard errors...")
 se_results = compute_full_ii_asymptotic_variance(params_hat, W;
