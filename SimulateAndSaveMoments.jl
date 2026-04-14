@@ -14,7 +14,7 @@ include("SimulationFunctions.jl")
 ση2_bounds = (0.025, 0.15)
 ρ_bounds   = (0.0, 0.9)
 
-num_data = 1
+num_data = 10
 
 N = 1000
 M = 60
