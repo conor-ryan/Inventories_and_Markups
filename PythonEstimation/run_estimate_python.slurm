@@ -33,7 +33,7 @@ echo "Output file: $RESULTS_FILE"
 echo "CPUs: ${SLURM_CPUS_PER_TASK:-unknown}"
 echo "Memory: ${SLURM_MEM_PER_NODE:-unknown} MB per node"
 
-module load python
+module load anaconda
 
 PYTHONPATH="$PROJECT_DIR/Code" python -m PythonEstimation.estimate_run \
         --data-dir "$DATA_DIR" \
