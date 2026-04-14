@@ -1,7 +1,5 @@
 using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Interpolations,
       Random, Statistics, DataFrames
-include("ModelFunctions.jl")
-
 """
     simulate_panel_data(params;
                         N=1000, M=60, burn_in=100, seed=nothing,

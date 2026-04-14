@@ -11,7 +11,7 @@ include("SimulateData.jl")
 
 params = Parameters(c=1.0, fc=0.0, μη=log(0.05), ση2=0.05, ρ_ω=0.2, γ=0.9,
                     δ=0.01, β=0.95, ϵ=6.0, μν=1, σν2=0.09,
-                    Smax=30, Ns=200, scale=1.0, size=100)
+                    Ns=200, scale=1.0, size=100)
 
 println("Simulating panel data (N=1000, M=60, burn_in=100)...")
 df_monthly, df_annual = simulate_panel_data(params;
@@ -94,7 +94,7 @@ params_hat = Parameters(c=params.c, fc=params.fc,
                         μη=ii_full.μη, ση2=ii_full.ση2, ρ_ω=ii_full.ρω, γ=ii_full.γ̂,
                         δ=ii_full.δ̂, β=params.β, ϵ=ii_full.ϵ̂,
                         μν=params.μν, σν2=ii_full.σν2,
-                        Smax=params.Smax, Ns=params.Ns,
+                        Ns=params.Ns,
                         scale=1.0, size=params.size)
 
 se_results = compute_full_ii_asymptotic_variance(params_hat, W;

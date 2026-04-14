@@ -4,7 +4,7 @@ include("ModelFunctions.jl")
 include("EstimationFunctions.jl")
 
 # Baseline placeholders from SolveModel.jl (line 5).
-params = Parameters(c=1.0, fc=0.0, μη=log(0.01),ση2=0.05,ρ_ω=0.1, γ=0.9,δ=0.01, β=0.95, ϵ=8.0, μν=1, σν2=0.15, Smax=20, Ns=200,scale=1.0,size=100)
+params = Parameters(c=1.0, fc=0.0, μη=log(0.01),ση2=0.05,ρ_ω=0.1, γ=0.9,δ=0.01, β=0.95, ϵ=8.0, μν=1, σν2=0.15, Ns=200,scale=1.0,size=100)
 
 
 

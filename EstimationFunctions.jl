@@ -295,7 +295,7 @@ end
                       μη=Float64(θ[2]), ση2=Float64(θ[3]), ρ_ω=Float64(θ[4]), γ=Float64(θ[1]),
                       δ=Float64(θ[7]), β=params_base.β, ϵ=Float64(θ[6]),
                       μν=params_base.μν, σν2=Float64(θ[5]),
-                      Smax=params_base.Smax, Ns=params_base.Ns,
+                      Ns=params_base.Ns,
                       size=params_base.size)
 end
 
@@ -542,7 +542,7 @@ function estimate_params_ii_full(params_base::Parameters,
                                       μη=μη_n, ση2=ση2_n, ρ_ω=ρω_n, γ=γ_n,
                                       δ=δ_n, β=params_base.β, ϵ=ϵ_n,
                                       μν=params_base.μν, σν2=σν2_n,
-                                      Smax=params_base.Smax, Ns=params_base.Ns,
+                                      Ns=params_base.Ns,
                                       size=params_base.size)
             _, _, _, _, ppi, opi, _, _ = solve_model(params_iter)
             m̃_nt = _simulate_all_moments(params_iter, ppi, opi, n_firms, n_years, seed)
@@ -717,7 +717,6 @@ function compute_moments_on_grid(params_base::Parameters,
                 ϵ    = ϵ_i,
                 μν   = μν_level,
                 σν2  = σν2_i,
-                Smax = params_base.Smax,
                 Ns   = params_base.Ns,
                 size = params_base.size)
 

@@ -234,7 +234,6 @@ function update_parameters(params::Parameters, x::Vector{Float64})
         σν2 = σν2_new,
         Q   = params.Q,
         Q_ω = params.Q_ω,
-        Smax = params.Smax,
         Ns   = params.Ns,
         size = params.size
     )
@@ -492,20 +491,6 @@ function stockout_probability(s, p, params)
     νbar = s * p^params.ϵ
     return 1.0 - cdf(params.dist, νbar)
 end
-
-
-"""
-    inventory_for_stockout_probability(p, params, prob)
-
-Compute the inventory level that implies stockout probability `prob`
-given price `p`.
-"""
-function inventory_for_stockout_probability(p, params, prob)
-
-    νbar = quantile(params.dist, 1.0 - prob)
-    return νbar / p^params.ϵ
-end
-
 
 """
     expected_demand(s, p, params)
