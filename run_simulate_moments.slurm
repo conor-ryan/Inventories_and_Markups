@@ -13,7 +13,7 @@ set -euo pipefail
 # Run from the directory containing this script.
 cd ~/work/Research/CRW_Inventory_Competition/
 
-
+git pull
 # If your cluster uses environment modules, uncomment and adjust:
 module load julia
 

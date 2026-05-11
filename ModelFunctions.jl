@@ -296,7 +296,7 @@ function truncated_lognormal_ratio_Eνγ_Eν(νbar::Float64, params::Parameters)
     half_Fbar = 0.5 * Fbar
     num = 0.0
     den = 0.0
-    for q in 1:params.Q
+    @inbounds for q in 1:params.Q
         # Map GL node from [-1,1] to (0, Fbar)
         u_q = half_Fbar * (params.gl_nodes[q] + 1.0)
         ν_q = exp(μ_log + σ_log * quantile(Normal(), u_q))
@@ -377,21 +377,23 @@ function solve_value_function(params; tol=1e-4, maxiter=1000, full=false, fast_i
     D_table, C_table = precompute_demand(p_policy_current, params)
 
     # Precompute uniform-grid constants (only used when fast_interp=true)
-    inv_h     = (Ns - 1) / (Sgrid[end] - Sgrid[1])
-    EV_cont_j = Vector{Float64}(undef, Ns)   # preallocate; reused every (iter, j)
+    inv_h       = (Ns - 1) / (Sgrid[end] - Sgrid[1])
+    EV_cont_all = Matrix{Float64}(undef, Ns, Nω)   # preallocated for single GEMM per iteration
+    n_policy_warm = zeros(Ns, Nω)                  # preallocated for cross-iteration warm-start
 
     while diff > tol && iter < maxiter
 
+        # One BLAS DGEMM instead of Nω separate GEMV calls
+        mul!(EV_cont_all, V_by_omega, transpose(P_ω))
+
         for j in 1:Nω
-            # State-conditional continuation: E[V(s', ω') | ω_j] for each next-period s'
             if fast_interp
-                mul!(EV_cont_j, V_by_omega, P_ω[j, :])
-                Vinterp_j = UniformInterp(copy(EV_cont_j), Sgrid[1], inv_h)
+                Vinterp_j = UniformInterp(EV_cont_all[:, j], Sgrid[1], inv_h)
             else
-                Vinterp_j = LinearInterpolation(Sgrid, V_by_omega * P_ω[j, :], extrapolation_bc=Line())
+                Vinterp_j = LinearInterpolation(Sgrid, EV_cont_all[:, j], extrapolation_bc=Line())
             end
 
-            n_upper = maximum(Sgrid)
+            n_upper = Sgrid[end]
             for i in 1:Ns
                 n_t, v = maximize_expected_value_choice(i, j, D_table, C_table, p_policy_current, ω_grid[j], Vinterp_j, params, n_upper=n_upper)
                 V_by_omega_new[i, j] = v
@@ -601,7 +603,7 @@ function expected_value_choice(n::Float64, s_i::Int, p_policy::AbstractVector{Fl
 
     EV = 0.0
 
-    for i in 1:params.Q
+    @inbounds for i in 1:params.Q
         EV += w[i] * shock_specific_value(n, s_i, p_policy, ν_nodes[i], ω, Vinterp, params)
     end
 
@@ -634,7 +636,7 @@ function expected_value_choice(n::Float64, p::Float64, s_i::Int, ω::Float64, Vi
 
     EV = 0.0
 
-    for i in 1:params.Q
+    @inbounds for i in 1:params.Q
         EV += w[i] * shock_specific_value(n, p, s_i, ν_nodes[i], ω, Vinterp, params)
     end
 
@@ -703,7 +705,7 @@ function expected_value_choice(n::Float64, s_i::Int,
                                 params::Parameters)::Float64
     w  = params.quad_weights
     EV = 0.0
-    for q in 1:params.Q
+    @inbounds for q in 1:params.Q
         EV += w[q] * shock_specific_value_precomp(n, D_col[q], C_col[q], p, s_i, Vinterp, params)
     end
     return EV / sqrt(pi)
@@ -843,11 +845,12 @@ function simulate_firm(rng::AbstractRNG, num_simulations::Int, num_periods::Int,
     and revenue.
     """
     Sgrid = params.Sgrid
-    all_inventory_levels = Float64[]
-    all_demand_levels = Float64[]
-    all_expenses = Float64[]
-    all_revenue = Float64[]
-    
+    total = num_simulations * num_periods
+    all_inventory_levels = Vector{Float64}(undef, total)
+    all_demand_levels    = Vector{Float64}(undef, total)
+    all_expenses         = Vector{Float64}(undef, total)
+    all_revenue          = Vector{Float64}(undef, total)
+
     for sim in 1:num_simulations
         # Random starting inventory; initial ω drawn from ergodic distribution
         s_current = rand(rng, Sgrid)
@@ -862,43 +865,26 @@ function simulate_firm(rng::AbstractRNG, num_simulations::Int, num_periods::Int,
             ω_idx     = draw_ω_index(rng, params, ω_idx)
         end
 
+        base_idx = (sim - 1) * num_periods
         for period in 1:num_periods
-            # Record beginning-of-period inventory
-            push!(all_inventory_levels, s_current)
+            k = base_idx + period
+            all_inventory_levels[k] = s_current
 
-            # Get optimal price and order quantity using interpolation
-            p_opt = price_policy_interp(s_current, ω_idx)
-
-            # Find closest grid point for order policy
-            n_opt = order_policy_interp(s_current, ω_idx)
-
+            p_opt     = price_policy_interp(s_current, ω_idx)
+            n_opt     = order_policy_interp(s_current, ω_idx)
             ω_current = params.ω_grid[ω_idx]
+            ν         = rand(rng, params.dist)
+            D         = min(ν * p_opt^(-params.ϵ), s_current)
 
-            # Draw demand shock from lognormal
-            ν = rand(rng, params.dist)
+            all_demand_levels[k] = D
+            all_expenses[k]      = operating_expense(ω_current, D, params)
+            all_revenue[k]       = p_opt * D
 
-            # Calculate demand
-            D = min(ν * p_opt^(-params.ϵ), s_current)
-            push!(all_demand_levels, D)
-
-            # Calculate operating expenses
-            c_opp = operating_expense(ω_current,D,params)
-            push!(all_expenses,c_opp)
-
-            # Revenue
-            push!(all_revenue, p_opt * D)
-
-            # Ending inventory after demand
-            s_end = s_current - D
-
-            # Next period beginning inventory: order + depreciation
-            s_current = (1 - params.δ) * (s_end + n_opt)
-
-            # Transition ω for next period via Markov chain
-            ω_idx = draw_ω_index(rng, params, ω_idx)
+            s_current = (1 - params.δ) * (s_current - D + n_opt)
+            ω_idx     = draw_ω_index(rng, params, ω_idx)
         end
     end
-    
+
     return all_inventory_levels, all_demand_levels, all_expenses, all_revenue
 end
 

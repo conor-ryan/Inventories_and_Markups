@@ -47,6 +47,64 @@ function estimate_omega_ar1(log_ω_proxy::AbstractVector{<:Real}, firm_boundary:
 end
 
 
+"""
+    _compute_annual_auxiliary_arrays(tot_opex, tot_sales, n_firms, n_years)
+
+Fast array-based OLS + AR(1) computation used by `_simulate_all_moments`.
+Avoids DataFrame construction and GLM overhead.
+
+Data is assumed to be in firm-major order: rows 1:n_years belong to firm 1,
+rows n_years+1:2*n_years to firm 2, etc. (the layout produced by
+`_simulate_all_moments`).
+"""
+function _compute_annual_auxiliary_arrays(tot_opex::Vector{Float64},
+                                          tot_sales::Vector{Float64},
+                                          n_firms::Int, n_years::Int)
+    n = length(tot_opex)
+
+    # Pass 1: means of log(sales) and log(opex) over valid obs
+    n_v = 0; sum_lx = 0.0; sum_ly = 0.0
+    @inbounds for i in 1:n
+        tot_opex[i] > 0.0 && tot_sales[i] > 0.0 || continue
+        n_v    += 1
+        sum_lx += log(tot_sales[i])
+        sum_ly += log(tot_opex[i])
+    end
+    x̄ = sum_lx / n_v
+    ȳ = sum_ly / n_v
+
+    # Pass 2: Sxx, Sxy → OLS slope
+    Sxx = 0.0; Sxy = 0.0
+    @inbounds for i in 1:n
+        tot_opex[i] > 0.0 && tot_sales[i] > 0.0 || continue
+        dx   = log(tot_sales[i]) - x̄
+        Sxx += dx * dx
+        Sxy += dx * (log(tot_opex[i]) - ȳ)
+    end
+    γ_OLS = Sxy / Sxx
+
+    # Pass 3: build log_ω_proxy and firm_boundary for valid obs
+    log_ω_proxy = Vector{Float64}(undef, n_v)
+    firm_bnd    = falses(n_v)
+    idx         = 0
+    prev_firm   = -1
+    @inbounds for i in 1:n
+        tot_opex[i] > 0.0 && tot_sales[i] > 0.0 || continue
+        idx += 1
+        log_ω_proxy[idx] = log(tot_opex[i]) - γ_OLS * log(tot_sales[i])
+        firm_i           = (i - 1) ÷ n_years + 1
+        firm_bnd[idx]    = firm_i != prev_firm
+        prev_firm        = firm_i
+    end
+
+    μ_η, σ_η2, ρ_ω, se_μη, se_ση2, se_ρω =
+        estimate_omega_ar1(log_ω_proxy, firm_bnd)
+
+    return (γ_OLS=γ_OLS, ρ_ω=ρ_ω, σ_η2=σ_η2, μ_η=μ_η,
+            se_ρω=se_ρω, se_ση2=se_ση2, se_μη=se_μη)
+end
+
+
 @inline function _radical_inverse(n::Int, base::Int)
     x = 0.0
     inv_base = 1.0 / base
@@ -215,23 +273,32 @@ function _simulate_all_moments(params::Parameters, ppi, opi,
 
     inv_sim, dem_sim, exp_sim, rev_sim =
         simulate_firm(rng, n_firms, n_months, ppi, opi, params)
-    any_inventory_above_grid = any(inv_sim .> params.Smax)
 
-    # Monthly moments
-    valid_mo = (dem_sim .> 0) .& (rev_sim .> 0)
-    isr_mo   = inv_sim[valid_mo] ./ rev_sim[valid_mo]
-    gm_mo    = rev_sim[valid_mo] ./ (params.c .* dem_sim[valid_mo])
-    avg_isr_sim = mean(isr_mo)
-    var_log1p_isr_sim = var(log1p.(isr_mo))
-    avg_gm_sim  = mean(gm_mo)
+    # Single-pass monthly moments — no temporary arrays, Welford online variance
+    n_mo = 0; sum_isr = 0.0; sum_gm = 0.0
+    mean_l1p = 0.0; M2_l1p = 0.0
+    any_above_grid = false
+    @inbounds for k in eachindex(inv_sim)
+        d = dem_sim[k]; r = rev_sim[k]; s = inv_sim[k]
+        (d > 0.0 && r > 0.0) || continue
+        isr      = s / r
+        l1p      = log1p(isr)
+        n_mo    += 1
+        sum_isr += isr
+        sum_gm  += r / (params.c * d)
+        delta    = l1p - mean_l1p
+        mean_l1p += delta / n_mo
+        M2_l1p  += delta * (l1p - mean_l1p)   # Welford update
+        s > params.Smax && (any_above_grid = true)
+    end
+    avg_isr_sim       = sum_isr / n_mo
+    avg_gm_sim        = sum_gm  / n_mo
+    var_log1p_isr_sim = M2_l1p  / (n_mo - 1)
 
-    # Annual aggregation for auxiliary regression
-    n_ann    = n_firms * n_years
-    firm_ids = Vector{Int}(undef, n_ann)
-    year_ids = Vector{Int}(undef, n_ann)
+    # Annual aggregation — @view avoids 12-element temporary slice allocations
+    n_ann     = n_firms * n_years
     tot_opex  = Vector{Float64}(undef, n_ann)
     tot_sales = Vector{Float64}(undef, n_ann)
-
     for firm in 1:n_firms
         m0 = (firm - 1) * n_months
         a0 = (firm - 1) * n_years
@@ -239,20 +306,16 @@ function _simulate_all_moments(params::Parameters, ppi, opi,
             m_first = m0 + (yr - 1) * 12 + 1
             m_last  = m0 + yr * 12
             a_idx   = a0 + yr
-            firm_ids[a_idx]  = firm
-            year_ids[a_idx]  = yr
-            tot_opex[a_idx]  = sum(exp_sim[m_first:m_last])
-            tot_sales[a_idx] = sum(dem_sim[m_first:m_last])
+            tot_opex[a_idx]  = sum(@view exp_sim[m_first:m_last])
+            tot_sales[a_idx] = sum(@view dem_sim[m_first:m_last])
         end
     end
 
-    df_ann = DataFrame(firm_id=firm_ids, year_id=year_ids,
-                       total_opex=tot_opex, total_sales=tot_sales)
-    ψ̃_ann = compute_annual_auxiliary(df_ann)
+    ψ̃_ann = _compute_annual_auxiliary_arrays(tot_opex, tot_sales, n_firms, n_years)
 
     return (avg_isr=avg_isr_sim, var_log1p_isr=var_log1p_isr_sim, avg_gross_margin=avg_gm_sim,
             γ_OLS=ψ̃_ann.γ_OLS, ρ_ω=ψ̃_ann.ρ_ω, σ_η2=ψ̃_ann.σ_η2, μ_η=ψ̃_ann.μ_η,
-            any_inventory_above_grid=any_inventory_above_grid)
+            any_inventory_above_grid=any_above_grid)
 end
 
 
