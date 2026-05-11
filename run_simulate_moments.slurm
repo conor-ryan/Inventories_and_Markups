@@ -7,6 +7,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=32G
+#SBATCH --account=econ_chcr_research
 
 set -euo pipefail
 
