@@ -2,7 +2,7 @@
 #SBATCH --job-name=simulate-moments
 #SBATCH --output=logs/simulate-moments-%j.out
 #SBATCH --error=logs/simulate-moments-%j.err
-#SBATCH --time=08:00:00
+#SBATCH --time=02:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
@@ -11,9 +11,10 @@
 set -euo pipefail
 
 # Run from the directory containing this script.
-cd ~/work/Research/CRW_Inventory_Competition/
+cd ~/work/Research/CRW_Inventory_Competition/Code
+git pull 
+cd ..
 
-git pull
 # If your cluster uses environment modules, uncomment and adjust:
 module load julia
 
