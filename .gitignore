@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Numba cache
+*.nbc
+*.nbi
+
+# Julia
+*.ji
+deps/deps.jl
+
+# OS
+.DS_Store
+Thumbs.db

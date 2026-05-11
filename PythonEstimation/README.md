@@ -1,79 +1,45 @@
-# PythonEstimation
+### Description of /PythonEstimation code object
+The main code for the model is written in julia, contained in Code/
+- ModelFunctions.jl contains the main methods for the model
+- EstimationFunctions.jl contains functions used to estimate the model
+- EstimateRun.jl loads this code and estimates the model from data. 
 
-Python translation of the Julia indirect-inference workflow used by `Code/Estimate_Run.jl`.
+The overall objective of the code in this subfolder is to replicate this code in python. 
 
-## What This Contains
+### Replication Stage 1 ###
+The first task is to replicate ModelFunctions.jl. The most important method is solve_value_function, which uses value function iteration to solve the model given a set of paramaters. 
 
-- `model_functions.py`: translated model primitives, value-function solver, interpolation helpers, and simulation logic.
-- `estimation_functions.py`: translated moment construction, full indirect-inference objective, grid start selection, Jacobian, and asymptotic variance.
-- `estimate_run.py`: end-to-end runner that mirrors the Julia script `Code/Estimate_Run.jl` using saved moments and covariance files in `SimulatedData/`.
-- `profile_solve_model.py`: bottleneck/profiling script focused on `solve_model` with a candidate parameter vector and optional per-iteration value-function logs.
+The first obective is to replciate this function and check it that it produces the same results given the same parameters. Make sure the parameter defaults are the same as specified in ModelFunctions.jl. Test the model at the parameters defined on line 6 of SolveModel.jl. 
 
-## Dependencies
+#### Working Preference ####
+User prefers line-by-line interactive Python terminal execution over command-line scripts.
+Use `interactive.py` for this workflow: copy-paste sections into a Python terminal.
 
-Install with pip:
 
-```bash
-pip install numpy pandas scipy
-```
+#### Coding Guidelines ####
+1) Do not use robustness error checking methods that might slow down performance. 
+2) Assume that the user will always provide functions with correct inputs
+3) Speed is important. Code should use native features of python that encourage speed rather than the original logic of julia. 
+4) The full model solution method is not necessary. 
+5) Interpolations/extrapolations are an important part of speed. These methods need to be as efficient as possible. 
 
-## Run
+#### Speed Guidelines ####
+1) Where possible, make sure to vectorize the code using Numpy. It will not be vectorized in julia. You must check each function to ask whether vectorization is possible. 
 
-From `Code/`:
+### Workspace Added For Replication ###
+Replication files are now in the PythonEstimation root:
+- `model_functions.py`: Python translation of the core model pieces needed for value-function iteration.
+- `interactive.py`: block-by-block workflow for Python terminal execution using the target parameters from line 6 of `SolveModel.jl`.
+- `VFI_REPLICATION.md`: short guide for scope and usage.
 
-```bash
-python -m PythonEstimation.estimate_run
-```
+### Parity Checking ###
+Use these files to compare Julia and Python outputs for the same objects:
+- `export_julia_reference.jl`: runs the Julia model and saves reference arrays to `parity_reference/`.
+- `check_parity.py`: runs the Python replication, loads Julia references, and prints max absolute and relative differences.
 
-Profile `solve_model` bottlenecks:
+Suggested run order:
+1) In Julia: `include("PythonEstimation/export_julia_reference.jl")`
+2) In Python: `python check_parity.py`
 
-```bash
-python -m PythonEstimation.profile_solve_model --verbose --ns 120 --maxiter 300 --profile-lines 30
-```
-
-Optional filename/path overrides:
-
-```bash
-python -m PythonEstimation.estimate_run \
-  --data-dir ../SimulatedData \
-  --target-moments-file target_moments.csv \
-  --target-vcov-file target_moment_vcov.csv \
-  --grid-file moments.csv \
-  --results-file estimated_parameters.csv
-```
-
-## Slurm Run (Linux)
-
-Use `run_estimate_python.slurm` in this folder.
-
-Example:
-
-```bash
-sbatch Code/PythonEstimation/run_estimate_python.slurm
-```
-
-You can override filenames and directories at submit time:
-
-```bash
-sbatch \
-  --export=ALL,PROJECT_DIR=/path/to/CRW_inventory_competition,DATA_DIR=/path/to/CRW_inventory_competition/SimulatedData,TARGET_MOMENTS_FILE=target_moments.csv,TARGET_VCOV_FILE=target_moment_vcov.csv,GRID_FILE=moments.csv,RESULTS_FILE=estimated_parameters_py.csv \
-  Code/PythonEstimation/run_estimate_python.slurm
-```
-
-## Inputs And Outputs
-
-- Inputs read from `SimulatedData/`:
-  - `target_moments.csv`
-  - `target_moment_vcov.csv`
-  - `moments.csv`
-- Output written to `SimulatedData/`:
-  - `estimated_parameters.csv`
-
-## Notes On Parity
-
-- Parameter and moment ordering follow the Julia implementation:
-  - Parameters: `(γ, μη, ση2, ρω, σν2, ϵ, δ)`
-  - Moments: `(avg_isr, var_log1p_isr, avg_gross_margin, γ_OLS, ρ_ω, σ_η2, μ_η)`
-- The efficient path used by `Estimate_Run.jl` is implemented (`solve_model(..., full=False)`).
-- `full=True` in the value-function solver is currently left unimplemented in Python because the run script does not use it.
-- Julia speed ideas were used as a baseline (uniform-grid interpolation, demand precomputation), but final optimization choices should be validated with Python profiling.
+Or run from Python only:
+- `python check_parity.py --run-julia`
