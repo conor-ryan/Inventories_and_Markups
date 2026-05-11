@@ -153,8 +153,8 @@ import pandas as pd
 # %% Load target moments and weighting matrix
 # Edit paths to match where your data files are stored.
 SIM_DATA_DIR = ROOT.parent.parent / "SimulatedData"
-target_moments_path = SIM_DATA_DIR / "target_moments_id_001.csv"
-target_vcov_path    = SIM_DATA_DIR / "target_moment_vcov_id_001.csv"
+target_moments_path = SIM_DATA_DIR / "target_moments_id_003.csv"
+target_vcov_path    = SIM_DATA_DIR / "target_moment_vcov_id_003.csv"
 grid_path           = SIM_DATA_DIR / "moments.csv"
 
 MOMENT_NAMES = ["avg_isr", "var_log1p_isr", "avg_gross_margin",
@@ -173,11 +173,18 @@ for k in MOMENT_NAMES:
 
 
 # %% Select warm-start
-# Set START_FROM_TRUE = True to initialise at the true parameters instead of
-# the best grid point (useful for debugging / checking identification).
-START_FROM_TRUE = False
+# WARM_START_METHOD: "true" | "grid" | "softmin" | "lhs" | "quadratic"
+#   lhs       — Latin Hypercube sample inside the narrowed top-k bounding box;
+#               each proposal is a genuine model solve, so the best is the
+#               true II-objective winner.  Best overall; costs ~n_sample VFI.
+#   softmin   — Boltzmann-weighted centroid of the n_top best grid points.
+#   quadratic — Quadratic surrogate minimum in normalised parameter space.
+#   grid      — Best grid point (always valid fallback).
+#   true      — True DGP parameters (debugging only).
+WARM_START_METHOD = "lhs"
 
-true_params_path = SIM_DATA_DIR / "true_parameters_id_001.csv"
+# --- True parameters (always loaded for comparison) ---
+true_params_path = SIM_DATA_DIR / "true_parameters_id_003.csv"
 df_true = pd.read_csv(true_params_path)
 true_vals = {
     "gamma":      float(df_true["γ"].iloc[0]),
@@ -189,24 +196,143 @@ true_vals = {
     "delta":      float(df_true["δ"].iloc[0]),
 }
 
-if START_FROM_TRUE:
-    print("Warm-start: TRUE parameters")
+# --- Grid, softmin, LHS, and quadratic (all computed for comparison) ---
+from global_max import softmin_warm_start, quadratic_warm_start, focused_lhs_search, _compute_objectives
+
+df_grid    = pd.read_csv(grid_path)
+start      = select_best_grid_start(df_grid, target_moments, W)
+grid_guess = [start["gamma"], start["mu_eta"], start["sigma_eta2"],
+              start["rho_omega"], start["sigma_nu2"], start["epsilon"],
+              start["delta"]]
+
+# Step 1: generate LHS proposals from the pre-computed grid neighbourhood
+# (no model solves yet — focused_lhs_search only uses df_grid to define the box)
+lhs_proposals, lhs_info = focused_lhs_search(
+    df_grid, target_moments, W, n_top=10, n_sample=50, tail_pct=0.10, seed=42,
+)
+
+# Step 2: evaluate each LHS proposal with a full model solve and collect
+# the resulting moments into df_lhs, which becomes the grid for the surrogates.
+# Seed df_lhs with the n_top best pre-computed grid points (stored moments,
+# no model solves required).
+_PCOLS_GREEK = ["γ", "μη", "ση2", "ρω", "σν2", "ϵ", "δ"]
+_ok_rows, _obj_ok = _compute_objectives(df_grid, target_moments, W)
+_top_order = np.argsort(_obj_ok)[:lhs_info["n_top_used"]]
+_lhs_rows = []
+for _gi in _top_order:
+    _gr = _ok_rows.iloc[_gi]
+    _lhs_rows.append({
+        **{c: float(_gr[c]) for c in _PCOLS_GREEK},
+        "failed": False,
+        **{k: float(_gr[k]) for k in MOMENT_NAMES},
+    })
+
+print(f"\nLHS: evaluating {len(lhs_proposals)} proposals "
+      f"(box from top-{lhs_info['n_top_used']} grid points, "
+      f"seeded with {len(_top_order)} grid rows) ...")
+lhs_best_obj   = np.inf
+lhs_best_guess = grid_guess
+for _i, _prop in enumerate(lhs_proposals):
+    _row = {
+        "γ": _prop[0], "μη": _prop[1], "ση2": _prop[2], "ρω": _prop[3],
+        "σν2": _prop[4], "ϵ": _prop[5], "δ": _prop[6], "failed": True,
+        **{k: float("nan") for k in MOMENT_NAMES},
+    }
+    try:
+        _p = Parameters(
+            c=params.c, fc=params.fc, beta=params.beta,
+            ns=params.ns, size=params.size,
+            gamma=_prop[0],     mu_eta=_prop[1],    sigma_eta2=_prop[2],
+            rho_omega=_prop[3], sigma_nu2=_prop[4], epsilon=_prop[5],
+            delta=_prop[6],
+        )
+        _sol  = solve_value_function(_p)
+        _moms = simulate_all_moments(
+            _p, _sol["p_policy"], _sol["n_policy"],
+            n_firms=500, n_years=20, seed=212311,
+        )
+        _d   = np.array([_moms[k] - target_moments[k] for k in MOMENT_NAMES])
+        _obj = float(_d @ W @ _d)
+        _row.update({k: _moms[k] for k in MOMENT_NAMES})
+        _row["failed"] = False
+        print(f"  [{_i+1:2d}/{len(lhs_proposals)}]  obj = {_obj:.6f}")
+        if _obj < lhs_best_obj:
+            lhs_best_obj   = _obj
+            lhs_best_guess = _prop
+    except Exception as _e:
+        print(f"  [{_i+1:2d}/{len(lhs_proposals)}]  FAILED: {_e}")
+    _lhs_rows.append(_row)
+print(f"  LHS best obj = {lhs_best_obj:.6f}")
+
+# Step 3: build df_lhs and feed it to surrogate methods
+df_lhs = pd.DataFrame(_lhs_rows)
+_n_lhs = len(df_lhs)  # n_top grid rows + LHS proposals
+
+soft_guess, soft_info = softmin_warm_start(
+    df_lhs, target_moments, W, n_top=_n_lhs, verbose=False,
+)
+quad_guess, quad_info = quadratic_warm_start(
+    df_lhs, target_moments, W, n_top=_n_lhs, verbose=False,
+)
+
+# --- Diagnostic: re-solve at best grid point and compare moments ---
+# Checks whether the grid moments are reproducible.  Large discrepancies
+# indicate simulation noise, a changed seed, or a grid/model mismatch.
+params_grid = Parameters(
+    c=params.c, fc=params.fc, beta=params.beta, ns=params.ns, size=params.size,
+    gamma=grid_guess[0],      mu_eta=grid_guess[1],     sigma_eta2=grid_guess[2],
+    rho_omega=grid_guess[3],  sigma_nu2=grid_guess[4],  epsilon=grid_guess[5],
+    delta=grid_guess[6],
+)
+sol_grid     = solve_value_function(params_grid)
+moments_grid = simulate_all_moments(
+    params_grid, sol_grid["p_policy"], sol_grid["n_policy"],
+    n_firms=500, n_years=20, seed=212311,
+)
+grid_row = df_grid.loc[start["row_index"]]
+print(f"\nDiagnostic: re-solved moments vs grid CSV at best grid point")
+print(f"{'moment':22s}  {'re-solved':>10s}  {'grid CSV':>10s}  {'diff':>10s}")
+print("-" * 60)
+for k in MOMENT_NAMES:
+    resol  = moments_grid[k]
+    stored = float(grid_row[k])
+    print(f"  {k:20s}  {resol:10.6f}  {stored:10.6f}  {resol - stored:+10.6f}")
+
+# --- Five-way comparison table ---
+_PNAMES = ["gamma", "mu_eta", "sigma_eta2", "rho_omega", "sigma_nu2", "epsilon", "delta"]
+print(f"\n{'':14s}  {'grid':>10s}  {'lhs best':>10s}  {'softmin':>10s}  {'quadratic':>10s}  {'true':>10s}")
+print("-" * 78)
+for k, name in enumerate(_PNAMES):
+    print(f"  {name:12s}  {grid_guess[k]:10.4f}  {lhs_best_guess[k]:10.4f}  "
+          f"{soft_guess[k]:10.4f}  {quad_guess[k]:10.4f}  {true_vals[name]:10.4f}")
+print(f"\n  {'obj (grid best)':30s} = {start['obj_value']:.6f}")
+print(f"  {'obj (LHS best, true)':30s} = {lhs_best_obj:.6f}")
+print(f"  {'softmin eff_n (on LHS grid)':30s} = {soft_info['effective_n']:.1f}")
+print(f"  {'quadratic R² (on LHS grid)':30s} = {quad_info['r2']:.4f}  "
+      f"(Hessian PD={quad_info['hessian_pd']},  "
+      f"trust-region active={quad_info['trust_region_active']})")
+
+# --- Set init_guess ---
+if WARM_START_METHOD == "grid":
     init_guess = [true_vals["gamma"], true_vals["mu_eta"], true_vals["sigma_eta2"],
                   true_vals["rho_omega"], true_vals["sigma_nu2"], true_vals["epsilon"],
                   true_vals["delta"]]
-    for k, v in true_vals.items():
-        print(f"  {k:12s} = {v:.4f}")
-else:
-    df_grid = pd.read_csv(grid_path)
-    start   = select_best_grid_start(df_grid, target_moments, W)
-    print(f"Warm-start: BEST GRID  (objective = {start['obj_value']:.6f})")
-    print(f"  gamma={start['gamma']:.4f}  mu_eta={start['mu_eta']:.4f}  "
-          f"sigma_eta2={start['sigma_eta2']:.4f}  rho_omega={start['rho_omega']:.4f}")
-    print(f"  sigma_nu2={start['sigma_nu2']:.4f}  epsilon={start['epsilon']:.4f}  "
-          f"delta={start['delta']:.4f}")
-    init_guess = [start["gamma"], start["mu_eta"], start["sigma_eta2"],
-                  start["rho_omega"], start["sigma_nu2"], start["epsilon"],
-                  start["delta"]]
+    print(f"\nWarm-start: TRUE parameters")
+elif WARM_START_METHOD == "grid":
+    init_guess = grid_guess
+    print(f"\nWarm-start: BEST GRID  (obj = {start['obj_value']:.6f})")
+elif WARM_START_METHOD == "softmin":
+    init_guess = soft_guess
+    print(f"\nWarm-start: SOFTMIN on LHS grid  (eff_n = {soft_info['effective_n']:.1f})")
+elif WARM_START_METHOD == "lhs":
+    init_guess = lhs_best_guess
+    print(f"\nWarm-start: LHS BEST  (obj = {lhs_best_obj:.6f},  "
+          f"from {len(lhs_proposals)} proposals)")
+else:  # "quadratic"
+    init_guess = quad_guess
+    print(f"\nWarm-start: QUADRATIC on LHS grid  "
+          f"(R² = {quad_info['r2']:.4f},  "
+          f"trust-region active = {quad_info['trust_region_active']})")
 
 
 # %% Check: simulated moments at TRUE parameters vs target moments
@@ -328,6 +454,6 @@ df_results = pd.DataFrame({
     "estimate":  [ii_result[k] for k in PARAM_NAMES],
     "std_error": list(se_results["se"]),
 })
-results_path = SIM_DATA_DIR / "estimates_id_001.csv"
+results_path = SIM_DATA_DIR / "estimates_id_003.csv"
 df_results.to_csv(results_path, index=False)
 print(f"\nSaved to {results_path}")

@@ -609,6 +609,8 @@ def select_best_grid_start(df_grid, target_moments, W):
     ok = ~df_grid["failed"].astype(bool)
     moment_cols = ["avg_isr", "var_log1p_isr", "avg_gross_margin",
                    "γ_OLS", "ρ_ω", "σ_η2", "μ_η"]
+    ok = ok & ~df_grid[moment_cols].isna().any(axis=1)
+    ok = ok & ~np.isinf(df_grid[moment_cols].to_numpy(dtype=np.float64)).any(axis=1)
     M_all = df_grid.loc[ok, moment_cols].to_numpy(dtype=np.float64)  # (n_ok, 7)
 
     # Vectorised objective: each row is m_hat - m_tilde
