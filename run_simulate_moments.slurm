@@ -8,7 +8,7 @@
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=32G
 #SBATCH --account=econ_chcr_research
-
+#SBATCH --partition=basic
 set -euo pipefail
 
 # Run from the directory containing this script.
