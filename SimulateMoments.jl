@@ -12,7 +12,7 @@ include("EstimationFunctions.jl")
 ση2_bounds = (0.025, 0.15)
 ρ_bounds   = (0.0, 0.9)
 
-n_param_points = 2000
+n_param_points = 20000
 param_bounds = [
     γ_bounds,
     μη_bounds,
@@ -25,7 +25,7 @@ param_bounds = [
 
 param_vectors = halton_param_vectors(param_bounds, n_param_points; seed=212311)
 
-param_vectors = param_vectors[1:100]
+# param_vectors = param_vectors[1:100]
 
 println("Running parameter sweep with $(length(param_vectors)) points...")
 
