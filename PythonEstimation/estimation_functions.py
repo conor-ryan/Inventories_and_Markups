@@ -471,23 +471,17 @@ def estimate_params_ii_full(
     ])
 
     method_key = str(method).strip().lower()
-    valid_methods = {"nelder-mead", "bobyqa", "cma-es"}
-    if method_key not in valid_methods:
-        raise ValueError(
-            f"Unknown method '{method}'. Expected one of {sorted(valid_methods)}"
+    if method_key != "nelder-mead":
+        raise NotImplementedError(
+            f"Method '{method}' is not currently implemented. "
+            "Only 'nelder-mead' is supported."
         )
 
     iter_count = [0]
 
     def objective(x):
         iter_count[0] += 1
-        if method_key == "bobyqa":
-            gamma, mu_eta, sigma_eta2, rho_omega, sigma_nu2, epsilon, delta = (
-                float(x[0]), float(x[1]), float(x[2]), float(x[3]),
-                float(x[4]), float(x[5]), float(x[6]),
-            )
-        else:
-            gamma, mu_eta, sigma_eta2, rho_omega, sigma_nu2, epsilon, delta = _unpack(x)
+        gamma, mu_eta, sigma_eta2, rho_omega, sigma_nu2, epsilon, delta = _unpack(x)
         try:
             p = Parameters(
                 c=params_base.c, fc=params_base.fc,
@@ -522,10 +516,7 @@ def estimate_params_ii_full(
         except Exception:
             return 1e10
 
-    if method_key == "bobyqa":
-        x0 = np.array(init_guess, dtype=np.float64)
-    else:
-        x0 = _pack(list(init_guess))
+    x0 = _pack(list(init_guess))
 
     def _make_simplex(x, scale):
         """Build an (n+1, n) initial simplex by perturbing each coordinate."""
@@ -568,97 +559,12 @@ def estimate_params_ii_full(
                 },
             )
 
-        elif method_key == "bobyqa":
-            import pybobyqa
-
-            bounds = np.array([
-                _BOUNDS["gamma"],
-                _BOUNDS["mu_eta"],
-                _BOUNDS["sigma_eta2"],
-                _BOUNDS["rho_omega"],
-                _BOUNDS["sigma_nu2"],
-                _BOUNDS["epsilon"],
-                _BOUNDS["delta"],
-            ], dtype=np.float64)
-
-            lb, ub = bounds[:, 0], bounds[:, 1]
-            rhobeg = 0.1 * float(np.min(ub - lb))
-            # x0 must be strictly interior by at least rhobeg on every coordinate
-            x_bobyqa = np.clip(x_best, lb + rhobeg, ub - rhobeg)
-
-            res_bobyqa = pybobyqa.solve(
-                objective,
-                x0=x_bobyqa,
-                bounds=(lb, ub),
-                rhobeg=rhobeg,
-                rhoend=tol,
-                maxfun=max_iter,
-                seek_global_minimum=False,
-                print_progress=False,
-            )
-
-            class _BobyqaResult:
-                pass
-
-            res = _BobyqaResult()
-            res.x = np.array(res_bobyqa.x, dtype=np.float64)
-            res.fun = float(res_bobyqa.f)
-            res.success = bool(res_bobyqa.flag > 0)
-
-        else:  # method_key == "cma-es"
-            import cma
-
-            bounds = [
-                [
-                    _BOUNDS["gamma"][0],
-                    _BOUNDS["mu_eta"][0],
-                    np.log(_BOUNDS["sigma_eta2"][0]),
-                    np.arctanh(_BOUNDS["rho_omega"][0]),
-                    np.log(_BOUNDS["sigma_nu2"][0]),
-                    _BOUNDS["epsilon"][0],
-                    np.log(_BOUNDS["delta"][0] / (1.0 - _BOUNDS["delta"][0])),
-                ],
-                [
-                    _BOUNDS["gamma"][1],
-                    _BOUNDS["mu_eta"][1],
-                    np.log(_BOUNDS["sigma_eta2"][1]),
-                    np.arctanh(_BOUNDS["rho_omega"][1]),
-                    np.log(_BOUNDS["sigma_nu2"][1]),
-                    _BOUNDS["epsilon"][1],
-                    np.log(_BOUNDS["delta"][1] / (1.0 - _BOUNDS["delta"][1])),
-                ],
-            ]
-
-            sigma0 = max(simplex_scale, 1e-2)
-            opts = {
-                "maxfevals": max_iter,
-                "verbose": -9 if not verbose else 1,
-                "bounds": bounds,
-            }
-            es = cma.CMAEvolutionStrategy(np.array(x_best, dtype=np.float64), sigma0, opts)
-            es.optimize(objective)
-
-            class _CmaResult:
-                pass
-
-            res = _CmaResult()
-            res.x = np.array(es.result.xbest, dtype=np.float64)
-            res.fun = float(es.result.fbest)
-            res.success = bool(np.isfinite(res.fun))
-
         if res.fun < obj_best:
             obj_best   = res.fun
             x_best     = res.x
             opt_result = res
 
-    if method_key == "bobyqa":
-        gamma, mu_eta, sigma_eta2, rho_omega, sigma_nu2, epsilon, delta = (
-            float(opt_result.x[0]), float(opt_result.x[1]), float(opt_result.x[2]),
-            float(opt_result.x[3]), float(opt_result.x[4]), float(opt_result.x[5]),
-            float(opt_result.x[6]),
-        )
-    else:
-        gamma, mu_eta, sigma_eta2, rho_omega, sigma_nu2, epsilon, delta = _unpack(opt_result.x)
+    gamma, mu_eta, sigma_eta2, rho_omega, sigma_nu2, epsilon, delta = _unpack(opt_result.x)
 
     if verbose:
         print("\n=== Full II Estimation Complete ===")

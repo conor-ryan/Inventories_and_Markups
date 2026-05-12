@@ -4,7 +4,7 @@ Tik-Tak global optimization algorithm (Guvenen et al.) for the II estimator.
 
 Uses pre-computed grid moments from moments.csv as tik points.  The
 algorithm ranks all valid grid rows by the II objective, then runs a local
-BOBYQA solve from each of the top-K mixture points:
+solve from each of the top-K mixture points:
 
     x_start_k = (1 - alpha_k) * x_best + alpha_k * x_tik_k
 
@@ -19,10 +19,7 @@ evaluation is expensive.
 import numpy as np
 import pandas as pd
 
-from estimation_functions import (
-    _BOUNDS,
-    estimate_params_ii_full,
-)
+from estimation_functions import estimate_params_ii_full
 
 # Canonical parameter order (must match estimate_params_ii_full)
 _PARAM_KEYS  = ["gamma", "mu_eta", "sigma_eta2", "rho_omega",
@@ -64,14 +61,6 @@ def _grid_row_to_theta(row):
     return np.array([float(row[col]) for col in _GRID_COLS])
 
 
-def _clip_to_interior(x):
-    """Clip x strictly inside _BOUNDS with the same margin used by BOBYQA."""
-    bounds = np.array([_BOUNDS[k] for k in _PARAM_KEYS], dtype=np.float64)
-    lb, ub = bounds[:, 0], bounds[:, 1]
-    rhobeg = 0.1 * float(np.min(ub - lb))
-    return np.clip(x, lb + rhobeg, ub - rhobeg)
-
-
 # ---------------------------------------------------------------------------
 # Tik-Tak
 # ---------------------------------------------------------------------------
@@ -90,7 +79,7 @@ def tiktak(
     verbose=True,
     method="nelder-mead",
     tol=1e-2,
-    tol_final=1e-5,
+    tol_final=1e-4,
 ):
     """Tik-Tak global optimization for the II estimator.
 
@@ -130,7 +119,7 @@ def tiktak(
         print()
 
     # --- Initialise from best grid point ---
-    x_best   = _clip_to_interior(_grid_row_to_theta(df_sorted.iloc[0]))
+    x_best   = _grid_row_to_theta(df_sorted.iloc[0])
     obj_best = float(df_sorted["obj_value"].iloc[0])
     best_result = None
     history = []
@@ -143,8 +132,8 @@ def tiktak(
         else:
             alpha = 1.0
 
-        x_tik   = _clip_to_interior(_grid_row_to_theta(df_sorted.iloc[it]))
-        x_start = _clip_to_interior((1.0 - alpha) * x_best + alpha * x_tik)
+        x_tik   = _grid_row_to_theta(df_sorted.iloc[it])
+        x_start = (1.0 - alpha) * x_best + alpha * x_tik
 
         if verbose:
             print(
@@ -173,9 +162,7 @@ def tiktak(
 
         if result["obj_value"] < obj_best:
             obj_best    = result["obj_value"]
-            x_best      = _clip_to_interior(
-                np.array([result[pname] for pname in _PARAM_KEYS])
-            )
+            x_best      = np.array([result[pname] for pname in _PARAM_KEYS])
             best_result = result
             if verbose:
                 print(f"  *** New best: {obj_best:.8f} ***")
@@ -190,7 +177,7 @@ def tiktak(
     if verbose:
         print(f"\n--- Final polish (tol={tol_final}) at best point (obj={obj_best:.8f}) ---")
 
-    x_final = _clip_to_interior(np.array([best_result[pname] for pname in _PARAM_KEYS]))
+    x_final = np.array([best_result[pname] for pname in _PARAM_KEYS])
     final_result = estimate_params_ii_full(
         target_moments,
         list(x_final),
@@ -199,7 +186,7 @@ def tiktak(
         n_firms=n_firms,
         n_years=n_years,
         seed=seed,
-        max_iter=max_iter,
+        max_iter=max_iter*5,
         verbose=verbose,
         n_restarts=0,
         method=method,
