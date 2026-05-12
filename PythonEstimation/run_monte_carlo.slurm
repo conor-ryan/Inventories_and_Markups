@@ -26,7 +26,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=8G
 #SBATCH --account=econ_crch_research
-#SBATCH --partition=standard
+#SBATCH --partition=basic
 set -euo pipefail
 
 # Run from the Code directory (mirrors run_simulate_moments.slurm convention).
@@ -34,7 +34,8 @@ cd ~/work/Research/CRW_Inventory_Competition/Code
 git pull
 cd ..
 
-module load anaconda   # adjust module name to match cluster environment
+module load anaconda
+conda activate crw
 
 DATASET_ID=$(printf "%03d" ${SLURM_ARRAY_TASK_ID})
 
