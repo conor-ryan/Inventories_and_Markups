@@ -33,7 +33,7 @@ if [[ -x /usr/bin/time ]]; then
 	/usr/bin/time -v ${JULIA_BIN} --threads=${THREADS} Code/SimulateMoments.jl
 else
 	echo "/usr/bin/time not found; running without process-level peak RSS report."
-	${JULIA_BIN} --threads=${THREADS} Code/SimulateMoments.jl
+	${JULIA_BIN} --threads=22 Code/SimulateMoments.jl
 fi
 
 echo "Memory snapshot after run:"
