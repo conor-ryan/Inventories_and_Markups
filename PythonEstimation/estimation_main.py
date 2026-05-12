@@ -75,7 +75,7 @@ PARAMS_BASE = Parameters(
 )
 
 MOMENT_NAMES = ["avg_isr", "var_log1p_isr", "avg_gross_margin",
-                "γ_OLS", "ρ_ω", "σ_η2", "μ_η"]
+                "γ_OLS", "ρ_ω", "σ_η2", "avg_opex_sales"]
 PARAM_NAMES  = ["gamma", "mu_eta", "sigma_eta2", "rho_omega",
                 "sigma_nu2", "epsilon", "delta"]
 

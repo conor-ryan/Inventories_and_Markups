@@ -34,7 +34,7 @@ PARAM_COLS  = ["γ", "μη", "ση2", "ρω", "σν2", "ϵ", "δ"]
 PARAM_NAMES = ["gamma", "mu_eta", "sigma_eta2", "rho_omega",
                "sigma_nu2", "epsilon", "delta"]
 MOMENT_COLS = ["avg_isr", "var_log1p_isr", "avg_gross_margin",
-               "γ_OLS", "ρ_ω", "σ_η2", "μ_η"]
+               "γ_OLS", "ρ_ω", "σ_η2", "avg_opex_sales"]
 
 _BOUNDS = {
     "gamma":      (0.05,   3.0),

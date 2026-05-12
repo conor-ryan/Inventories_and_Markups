@@ -158,7 +158,7 @@ target_vcov_path    = SIM_DATA_DIR / "target_moment_vcov_id_003.csv"
 grid_path           = SIM_DATA_DIR / "moments.csv"
 
 MOMENT_NAMES = ["avg_isr", "var_log1p_isr", "avg_gross_margin",
-                "γ_OLS", "ρ_ω", "σ_η2", "μ_η"]
+                "γ_OLS", "ρ_ω", "σ_η2", "avg_opex_sales"]
 
 df_target  = pd.read_csv(target_moments_path)
 target_moments = dict(zip(df_target["moment"], df_target["value"].astype(float)))
