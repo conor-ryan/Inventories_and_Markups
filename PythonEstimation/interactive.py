@@ -153,8 +153,8 @@ import pandas as pd
 # %% Load target moments and weighting matrix
 # Edit paths to match where your data files are stored.
 SIM_DATA_DIR = ROOT.parent.parent / "SimulatedData"
-target_moments_path = SIM_DATA_DIR / "target_moments_id_003.csv"
-target_vcov_path    = SIM_DATA_DIR / "target_moment_vcov_id_003.csv"
+target_moments_path = SIM_DATA_DIR / "target_moments_id_001.csv"
+target_vcov_path    = SIM_DATA_DIR / "target_moment_vcov_id_001.csv"
 grid_path           = SIM_DATA_DIR / "moments.csv"
 
 MOMENT_NAMES = ["avg_isr", "var_log1p_isr", "avg_gross_margin",
@@ -208,7 +208,7 @@ grid_guess = [start["gamma"], start["mu_eta"], start["sigma_eta2"],
 # Step 1: generate LHS proposals from the pre-computed grid neighbourhood
 # (no model solves yet — focused_lhs_search only uses df_grid to define the box)
 lhs_proposals, lhs_info = focused_lhs_search(
-    df_grid, target_moments, W, n_top=10, n_sample=50, tail_pct=0.10, seed=42,
+    df_grid, target_moments, W, n_top=10, n_sample=10, tail_pct=0.10, seed=42,
 )
 
 # Step 2: evaluate each LHS proposal with a full model solve and collect
@@ -454,6 +454,6 @@ df_results = pd.DataFrame({
     "estimate":  [ii_result[k] for k in PARAM_NAMES],
     "std_error": list(se_results["se"]),
 })
-results_path = SIM_DATA_DIR / "estimates_id_003.csv"
+results_path = SIM_DATA_DIR / "estimates_id_001.csv"
 df_results.to_csv(results_path, index=False)
 print(f"\nSaved to {results_path}")

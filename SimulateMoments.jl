@@ -12,7 +12,7 @@ include("EstimationFunctions.jl")
 ση2_bounds = (0.025, 0.15)
 ρ_bounds   = (0.0, 0.9)
 
-n_param_points = 2000
+n_param_points = 20000
 param_bounds = [
     γ_bounds,
     μη_bounds,
@@ -25,21 +25,31 @@ param_bounds = [
 
 param_vectors = halton_param_vectors(param_bounds, n_param_points; seed=212311)
 
-# param_vectors = param_vectors[1:100]
+# Slice param_vectors by SLURM array task ID (falls back to full set if not in a job array)
+task_id    = parse(Int, get(ENV, "SLURM_ARRAY_TASK_ID",    "1"))
+n_tasks    = parse(Int, get(ENV, "SLURM_ARRAY_TASK_COUNT", "1"))
+chunk_size = ceil(Int, length(param_vectors) / n_tasks)
+i_start    = (task_id - 1) * chunk_size + 1
+i_end      = min(task_id * chunk_size, length(param_vectors))
+param_vectors = param_vectors[i_start:i_end]
 
-println("Running parameter sweep with $(length(param_vectors)) points...")
+output_path = n_tasks > 1 ?
+    "SimulatedData/moments_$(lpad(task_id, 3, '0')).csv" :
+    "SimulatedData/moments.csv"
+
+println("Task $(task_id)/$(n_tasks): grid points $(i_start)–$(i_end) ($(length(param_vectors)) total)")
 
 df_out = compute_moments_on_grid(
     param_vectors;
     n_firms=500,
     n_years=20,
     seed=212311,
-    output_path="SimulatedData/moments.csv"
+    output_path=output_path
 )
 
 n_ok = sum(.!df_out.failed)
 println("Sweep complete. $(n_ok) / $(nrow(df_out)) points succeeded.")
-println("Saved: SimulatedData/moments.csv")
+println("Saved: $(output_path)")
 
 # Summary output
 fail_fraction = sum(df_out.failed) / nrow(df_out)

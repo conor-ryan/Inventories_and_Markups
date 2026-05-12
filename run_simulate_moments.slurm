@@ -1,14 +1,15 @@
 #!/bin/bash
 #SBATCH --job-name=simulate-moments
-#SBATCH --output=logs/simulate-moments-%j.out
-#SBATCH --error=logs/simulate-moments-%j.err
+#SBATCH --output=logs/simulate-moments-%A_%a.out
+#SBATCH --error=logs/simulate-moments-%A_%a.err
 #SBATCH --time=01:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=64
-#SBATCH --mem=32G
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=16G
 #SBATCH --account=econ_crch_research
 #SBATCH --partition=basic
+#SBATCH --array=1-4
 set -euo pipefail
 
 # Run from the directory containing this script.
@@ -22,19 +23,43 @@ module load julia
 JULIA_BIN=${JULIA_BIN:-julia}
 THREADS=${SLURM_CPUS_PER_TASK:-1}
 
-echo "SLURM job id: ${SLURM_JOB_ID:-unknown}"
-echo "Requested CPUs: ${SLURM_CPUS_PER_TASK:-unknown}"
+echo "SLURM job id:    ${SLURM_JOB_ID:-unknown}"
+echo "Array task id:   ${SLURM_ARRAY_TASK_ID:-unknown} / ${SLURM_ARRAY_TASK_COUNT:-unknown}"
+echo "Requested CPUs:  ${SLURM_CPUS_PER_TASK:-unknown}"
 echo "Requested memory: ${SLURM_MEM_PER_NODE:-unknown} MB per node"
 
 echo "Memory snapshot before run:"
 free -h || true
 
 if [[ -x /usr/bin/time ]]; then
-	/usr/bin/time -v ${JULIA_BIN} --threads=16 Code/SimulateMoments.jl
+	/usr/bin/time -v ${JULIA_BIN} --threads=${THREADS} Code/SimulateMoments.jl
 else
 	echo "/usr/bin/time not found; running without process-level peak RSS report."
-	${JULIA_BIN} --threads=16 Code/SimulateMoments.jl
+	${JULIA_BIN} --threads=${THREADS} Code/SimulateMoments.jl
 fi
 
 echo "Memory snapshot after run:"
 free -h || true
+
+# After the last array task completes, submit a small concatenation job.
+# This only runs once (when SLURM_ARRAY_TASK_ID equals the last task).
+if [[ "${SLURM_ARRAY_TASK_ID}" == "${SLURM_ARRAY_TASK_COUNT}" ]]; then
+    sbatch --dependency=afterok:${SLURM_ARRAY_JOB_ID} \
+           --job-name=concat-moments \
+           --output=logs/concat-moments-%j.out \
+           --error=logs/concat-moments-%j.err \
+           --time=00:10:00 \
+           --nodes=1 --ntasks=1 --cpus-per-task=1 --mem=4G \
+           --account=econ_crch_research \
+           --partition=basic \
+           --wrap="${JULIA_BIN} --project=Code -e '
+using DataFrames, CSV
+files = sort(filter(f -> occursin(r\"moments_\\d+\\.csv\", f),
+                    readdir(\"SimulatedData\", join=true)))
+isempty(files) && error(\"No chunk files found in SimulatedData/\")
+df = vcat(CSV.read.(files, DataFrame)...)
+CSV.write(\"SimulatedData/moments.csv\", df)
+println(\"Concatenated \$(length(files)) files → SimulatedData/moments.csv (\$(nrow(df)) rows)\")
+'"
+    echo "Concatenation job submitted (depends on array job ${SLURM_ARRAY_JOB_ID})."
+fi
