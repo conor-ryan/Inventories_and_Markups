@@ -48,7 +48,7 @@ end
 
 
 """
-    _compute_annual_auxiliary_arrays(tot_opex, tot_sales, n_firms, n_years)
+    _compute_annual_auxiliary_arrays(tot_opex, tot_sales, tot_revenue, n_firms, n_years)
 
 Fast array-based OLS + AR(1) computation used by `_simulate_all_moments`.
 Avoids DataFrame construction and GLM overhead.
@@ -59,6 +59,7 @@ rows n_years+1:2*n_years to firm 2, etc. (the layout produced by
 """
 function _compute_annual_auxiliary_arrays(tot_opex::Vector{Float64},
                                           tot_sales::Vector{Float64},
+                                          tot_revenue::Vector{Float64},
                                           n_firms::Int, n_years::Int)
     n = length(tot_opex)
 
@@ -100,12 +101,12 @@ function _compute_annual_auxiliary_arrays(tot_opex::Vector{Float64},
     μ_η, σ_η2, ρ_ω, se_μη, se_ση2, se_ρω =
         estimate_omega_ar1(log_ω_proxy, firm_bnd)
 
-    # Average operating expense / sales ratio (annual)
+    # Average operating expense / revenue ratio (annual)
     sum_opex_sales = 0.0
     n_os = 0
     @inbounds for i in 1:n
-        tot_opex[i] > 0.0 && tot_sales[i] > 0.0 || continue
-        sum_opex_sales += tot_opex[i] / tot_sales[i]
+        tot_opex[i] > 0.0 && tot_revenue[i] > 0.0 || continue
+        sum_opex_sales += tot_opex[i] / tot_revenue[i]
         n_os += 1
     end
     avg_opex_sales = sum_opex_sales / n_os
@@ -233,8 +234,9 @@ function compute_annual_auxiliary(df_annual::DataFrame)
     μ_η, σ_η2, ρ_ω, se_μη, se_ση2, se_ρω =
         estimate_omega_ar1(log_ω_proxy, df_ols.firm_boundary)
 
-    valid_full = (df.total_opex .> 0) .& (df.total_sales .> 0)
-    avg_opex_sales = mean(df.total_opex[valid_full] ./ df.total_sales[valid_full])
+    # avg_opex_sales is defined as operating expenses divided by total revenue.
+    valid_full = (df.total_opex .> 0) .& (df.total_revenue .> 0)
+    avg_opex_sales = mean(df.total_opex[valid_full] ./ df.total_revenue[valid_full])
 
     return (γ_OLS=γ_OLS, ρ_ω=ρ_ω, σ_η2=σ_η2, μ_η=μ_η,
             avg_opex_sales=avg_opex_sales,
@@ -312,8 +314,9 @@ function _simulate_all_moments(params::Parameters, ppi, opi,
 
     # Annual aggregation — @view avoids 12-element temporary slice allocations
     n_ann     = n_firms * n_years
-    tot_opex  = Vector{Float64}(undef, n_ann)
-    tot_sales = Vector{Float64}(undef, n_ann)
+    tot_opex    = Vector{Float64}(undef, n_ann)
+    tot_sales   = Vector{Float64}(undef, n_ann)
+    tot_revenue = Vector{Float64}(undef, n_ann)
     for firm in 1:n_firms
         m0 = (firm - 1) * n_months
         a0 = (firm - 1) * n_years
@@ -323,10 +326,11 @@ function _simulate_all_moments(params::Parameters, ppi, opi,
             a_idx   = a0 + yr
             tot_opex[a_idx]  = sum(@view exp_sim[m_first:m_last])
             tot_sales[a_idx] = sum(@view dem_sim[m_first:m_last])
+            tot_revenue[a_idx] = sum(@view rev_sim[m_first:m_last])
         end
     end
 
-    ψ̃_ann = _compute_annual_auxiliary_arrays(tot_opex, tot_sales, n_firms, n_years)
+    ψ̃_ann = _compute_annual_auxiliary_arrays(tot_opex, tot_sales, tot_revenue, n_firms, n_years)
 
     return (avg_isr=avg_isr_sim, var_log1p_isr=var_log1p_isr_sim, avg_gross_margin=avg_gm_sim,
             γ_OLS=ψ̃_ann.γ_OLS, ρ_ω=ψ̃_ann.ρ_ω, σ_η2=ψ̃_ann.σ_η2, avg_opex_sales=ψ̃_ann.avg_opex_sales,
@@ -597,9 +601,9 @@ function estimate_params_ii_full(target_moments::NamedTuple,init_guess::Abstract
         @printf("  γ_OLS (annual)   = %10.6f\n", m̂[4])
         @printf("  ρ_ω   (annual)   = %10.6f\n", m̂[5])
         @printf("  σ_η2  (annual)   = %10.6f\n", m̂[6])
-        @printf("  opex/sales(ann)  = %10.6f\n", m̂[7])
+        @printf("  opex/revenue(ann)= %10.6f\n", m̂[7])
         println("\nStarting Nelder-Mead. Iteration output shows simulated moments and objective.")
-        println("\n iter │ avg_isr │ var_log1p │ avg_gm  │  γ_OLS  │   ρ_ω   │   σ_η2  │ opx/sls │   obj")
+        println("\n iter │ avg_isr │ var_log1p │ avg_gm  │  γ_OLS  │   ρ_ω   │   σ_η2  │ opx/rev │   obj")
         println("──────┼─────────┼───────────┼─────────┼─────────┼─────────┼─────────┼─────────┼──────────")
     end
 

@@ -37,8 +37,9 @@ draws_df = DataFrame(
 )
 
 success_id = 0   # consecutive file index; only incremented on successful saves
-
-for attempt in 1:num_data
+attempt = 0
+while success_id < num_data
+    attempt += 1
     # Always advance rng so later draws are not affected by earlier failures
     γ_draw   = draw_uniform(rng, γ_bounds)
     μη_draw  = draw_uniform(rng, μη_bounds)
@@ -63,6 +64,10 @@ for attempt in 1:num_data
 
         println("[attempt ", attempt, " / ", num_data, "] Computing target moments...")
         target_moments = compute_full_ii_target_moments(df_monthly, df_annual)
+
+        if target_moments.avg_isr > 4 || target_moments.avg_opex_sales < 1e-3
+            error("Unrealistic moments (avg_isr > 4 or avg_opex_sales < 0.001); skipping save.")
+        end
 
         println("[attempt ", attempt, " / ", num_data, "] Computing bootstrap moment variances...")
         bootstrap_vars = bootstrap_moment_variances(df_monthly, df_annual;
@@ -97,7 +102,7 @@ for attempt in 1:num_data
         println("[attempt ", attempt, " / ", num_data, "] Saved as id=", id_str,
                 " → moments: ", moments_path)
     catch e
-        println("[attempt ", attempt, " / ", num_data, "] SKIPPED — error: ", e)
+        println("[attempt ", success_id, " / ", num_data, "] SKIPPED — error: ", e)
     end
 end
 

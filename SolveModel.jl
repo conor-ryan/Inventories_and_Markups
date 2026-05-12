@@ -1,16 +1,19 @@
-using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Plots, Interpolations, LineSearch, Random, Statistics, DataFrames, GLM, FixedEffectModels, Printf, BenchmarkTools, Profile
+using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Plots, Interpolations, LineSearch, Random, Statistics, DataFrames, CSV, GLM, FixedEffectModels, Printf, BenchmarkTools, Profile
 include("ModelFunctions.jl")
 include("EstimationFunctions.jl")
 
 Ns = 200
+# df_params = CSV.read("../SimulatedData/true_parameters_id_002.csv", DataFrame)
+# r = df_params[1, :]
+# params = Parameters(c=1.0, fc=0.0, μη=Float64(r.μη),ση2=Float64(r.ση2),ρ_ω=Float64(r.ρ_ω), γ=Float64(r.γ),δ=Float64(r.δ), β=0.95, ϵ=Float64(r.ϵ), μν=1, σν2=Float64(r.σν2),Ns=Ns,scale=1.0,size=100.0)
 params = Parameters(c=1.0, fc=0.0, μη=log(0.01),ση2=0.05,ρ_ω=0.1, γ=0.9,δ=0.01, β=0.95, ϵ=8.0, μν=1, σν2=0.15,Ns=Ns,scale=1.0,size=100.0)
 
 
 # ---------------------------------------------------
 # Single-iteration benchmark (run interactively before the full solve)
 # ---------------------------------------------------
-println("Benchmarking one value-function iteration...")
-display(@benchmark solve_value_function($params, maxiter=1000,fast_interp=true) samples=10 evals=1)
+# println("Benchmarking one value-function iteration...")
+# display(@benchmark solve_value_function($params, maxiter=1000,fast_interp=true) samples=10 evals=1)
 
 # # ---------------------------------------------------
 # # Profile one iteration and display a flat time profile
@@ -25,12 +28,12 @@ display(@benchmark solve_value_function($params, maxiter=1000,fast_interp=true) 
 
 # # Solve model using ModelFunctions
 # println("Solving price policy...")
-p_policy_current = zeros(params.Ns, params.Q_ω)
+# p_policy_current = zeros(params.Ns, params.Q_ω)
 
-# Initial price guess via static FOC for each ω state
-for j in 1:params.Q_ω
-    p_policy_current[:, j] .= solve_price_policy(params, params.c, params.ω_grid[j])
-end
+# # Initial price guess via static FOC for each ω state
+# for j in 1:params.Q_ω
+#     p_policy_current[:, j] .= solve_price_policy(params, params.c, params.ω_grid[j])
+# end
 
 # ind = 3:length(params.Sgrid)
 # plot(params.Sgrid[ind],p_policy[ind])
