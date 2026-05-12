@@ -25,7 +25,7 @@ param_bounds = [
 
 param_vectors = halton_param_vectors(param_bounds, n_param_points; seed=212311)
 
-param_vectors = param_vectors[1:100]
+# param_vectors = param_vectors[1:100]
 
 println("Running parameter sweep with $(length(param_vectors)) points...")
 
@@ -34,7 +34,7 @@ df_out = compute_moments_on_grid(
     n_firms=500,
     n_years=20,
     seed=212311,
-    output_path="../SimulatedData/moments.csv"
+    output_path="/SimulatedData/moments.csv"
 )
 
 n_ok = sum(.!df_out.failed)
