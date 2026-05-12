@@ -17,7 +17,7 @@
 #       sbatch --array=1-${N}%4 run_monte_carlo.slurm
 # =============================================================================
 #SBATCH --job-name=mc-estimation
-#SBATCH --array=1-10
+#SBATCH --array=1-49
 #SBATCH --output=logs/mc-%A_%a.out
 #SBATCH --error=logs/mc-%A_%a.err
 #SBATCH --time=04:00:00
@@ -34,7 +34,7 @@ cd ~/work/Research/CRW_Inventory_Competition/Code
 git pull
 cd ..
 
-module load python   # adjust module name to match cluster environment
+module load anaconda   # adjust module name to match cluster environment
 
 DATASET_ID=$(printf "%03d" ${SLURM_ARRAY_TASK_ID})
 
