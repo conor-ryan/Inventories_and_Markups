@@ -2,7 +2,7 @@
 #SBATCH --job-name=simulate-moments
 #SBATCH --output=logs/simulate-moments-%A_%a.out
 #SBATCH --error=logs/simulate-moments-%A_%a.err
-#SBATCH --time=01:00:00
+#SBATCH --time=08:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
