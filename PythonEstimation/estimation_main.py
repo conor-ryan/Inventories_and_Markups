@@ -140,13 +140,13 @@ def main():
         n_firms=500,
         n_years=20,
         seed=212311,
-        max_iter=5000,
+        max_iter=1000,
         n_iterations=10,
         alpha_min=0.1,
         verbose=False,
-        method="bobyqa",
+        method="nelder-mead",
         tol=1e-2,
-        tol_final=1e-5,
+        tol_final=1e-4,
     )
     t_est = time.perf_counter() - t0
     print(f"  Estimation wall time : {t_est:.1f}s")
