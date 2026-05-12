@@ -34,7 +34,7 @@ df_out = compute_moments_on_grid(
     n_firms=500,
     n_years=20,
     seed=212311,
-    output_path="/SimulatedData/moments.csv"
+    output_path="SimulatedData/moments.csv"
 )
 
 n_ok = sum(.!df_out.failed)
