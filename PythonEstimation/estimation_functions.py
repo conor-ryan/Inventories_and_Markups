@@ -244,7 +244,7 @@ def compute_annual_auxiliary(tot_opex, tot_sales):
 
     Returns
     -------
-    dict with keys: gamma_OLS, rho_omega, sigma_eta2, mu_eta
+    dict with keys: gamma_OLS, rho_omega, sigma_eta2, avg_opex_sales
     """
     log_opex  = np.log(tot_opex).ravel()
     log_sales = np.log(tot_sales).ravel()
@@ -262,8 +262,11 @@ def compute_annual_auxiliary(tot_opex, tot_sales):
 
     mu_eta, sigma_eta2, rho_omega = estimate_omega_ar1(log_omega_panel)
 
+    valid_os = (tot_opex > 0.0) & (tot_sales > 0.0)
+    avg_opex_sales = float((tot_opex[valid_os] / tot_sales[valid_os]).mean())
+
     return {"γ_OLS": gamma_OLS, "ρ_ω": rho_omega,
-            "σ_η2": sigma_eta2, "μ_η": mu_eta}
+            "σ_η2": sigma_eta2, "avg_opex_sales": avg_opex_sales}
 
 
 def compute_monthly_moments(inv_out, dem_out, rev_out, c):
@@ -315,7 +318,7 @@ def simulate_all_moments(params, p_policy, n_policy, n_firms, n_years, seed, bur
     -------
     dict with keys:
         avg_isr, var_log1p_isr, avg_gross_margin  (monthly)
-        gamma_OLS, rho_omega, sigma_eta2, mu_eta  (annual auxiliary)
+        gamma_OLS, rho_omega, sigma_eta2, avg_opex_sales  (annual auxiliary)
     """
     n_months = n_years * 12
 
@@ -344,7 +347,7 @@ def simulate_all_moments(params, p_policy, n_policy, n_firms, n_years, seed, bur
         "γ_OLS":            ann["γ_OLS"],
         "ρ_ω":          ann["ρ_ω"],
         "σ_η2":           ann["σ_η2"],
-        "μ_η":            ann["μ_η"],
+        "avg_opex_sales": ann["avg_opex_sales"],
     }
 
 
@@ -457,7 +460,7 @@ def estimate_params_ii_full(
         target_moments["γ_OLS"],
         target_moments["ρ_ω"],
         target_moments["σ_η2"],
-        target_moments["μ_η"],
+        target_moments["avg_opex_sales"],
     ])
 
     iter_count = [0]
@@ -484,7 +487,7 @@ def estimate_params_ii_full(
                 m_tilde_d["γ_OLS"],
                 m_tilde_d["ρ_ω"],
                 m_tilde_d["σ_η2"],
-                m_tilde_d["μ_η"],
+                m_tilde_d["avg_opex_sales"],
             ])
             M   = m_hat - m_tilde
             sse = float(M @ W @ M)
@@ -514,7 +517,7 @@ def estimate_params_ii_full(
 
     if verbose:
         print("\n=== Full II Estimation — Data Moments ===")
-        keys = ["avg_isr","var_log1p_isr","avg_gross_margin","γ_OLS","ρ_ω","σ_η2","μ_η"]
+        keys = ["avg_isr","var_log1p_isr","avg_gross_margin","γ_OLS","ρ_ω","σ_η2","avg_opex_sales"]
         for k, v in zip(keys, m_hat):
             print(f"  {k:20s} = {v:10.6f}")
         print(f"\nNelder-Mead: simplex_scale={simplex_scale}, n_restarts={n_restarts}")
@@ -603,12 +606,12 @@ def select_best_grid_start(df_grid, target_moments, W):
         target_moments["γ_OLS"],
         target_moments["ρ_ω"],
         target_moments["σ_η2"],
-        target_moments["μ_η"],
+        target_moments["avg_opex_sales"],
     ])
 
     ok = ~df_grid["failed"].astype(bool)
     moment_cols = ["avg_isr", "var_log1p_isr", "avg_gross_margin",
-                   "γ_OLS", "ρ_ω", "σ_η2", "μ_η"]
+                   "γ_OLS", "ρ_ω", "σ_η2", "avg_opex_sales"]
     ok = ok & ~df_grid[moment_cols].isna().any(axis=1)
     ok = ok & ~np.isinf(df_grid[moment_cols].to_numpy(dtype=np.float64)).any(axis=1)
     M_all = df_grid.loc[ok, moment_cols].to_numpy(dtype=np.float64)  # (n_ok, 7)
@@ -635,6 +638,149 @@ def select_best_grid_start(df_grid, target_moments, W):
 
 
 # ---------------------------------------------------------------------------
+# Stage 3 helper: parameter sweep moments on grid
+# ---------------------------------------------------------------------------
+
+def _grid_worker(args):
+    """Module-level worker for ProcessPoolExecutor (must be picklable)."""
+    import numba as _nb
+
+    idx, theta_row, n_firms, n_years, seed, threads_per_worker = args
+    _nb.set_num_threads(threads_per_worker)
+
+    gamma, mu_eta, sigma_eta2, rho_omega, sigma_nu2, epsilon, delta = theta_row
+    row = {
+        "γ": float(gamma), "μη": float(mu_eta), "ση2": float(sigma_eta2),
+        "ρω": float(rho_omega), "σν2": float(sigma_nu2),
+        "ϵ": float(epsilon), "δ": float(delta),
+        "avg_isr": np.nan, "var_log1p_isr": np.nan,
+        "avg_gross_margin": np.nan, "γ_OLS": np.nan,
+        "ρ_ω": np.nan, "σ_η2": np.nan, "avg_opex_sales": np.nan,
+        "any_inventory_above_grid": False, "failed": True,
+    }
+    try:
+        p = Parameters(
+            c=1.0, fc=0.0,
+            mu_eta=float(mu_eta), sigma_eta2=float(sigma_eta2),
+            rho_omega=float(rho_omega), gamma=float(gamma),
+            delta=float(delta), beta=0.95,
+            epsilon=float(epsilon), mu_nu=1.0, sigma_nu2=float(sigma_nu2),
+            ns=200, scale=1.0, size=100.0,
+        )
+        sol = solve_value_function(p)
+        m = simulate_all_moments(
+            p, sol["p_policy"], sol["n_policy"],
+            n_firms=n_firms, n_years=n_years, seed=seed,
+        )
+        row.update({
+            "avg_isr": float(m["avg_isr"]),
+            "var_log1p_isr": float(m["var_log1p_isr"]),
+            "avg_gross_margin": float(m["avg_gross_margin"]),
+            "γ_OLS": float(m["γ_OLS"]),
+            "ρ_ω": float(m["ρ_ω"]),
+            "σ_η2": float(m["σ_η2"]),
+            "avg_opex_sales": float(m["avg_opex_sales"]),
+            "any_inventory_above_grid": False,
+            "failed": False,
+        })
+    except Exception:
+        pass
+    return idx, row
+
+
+def compute_moments_on_grid(param_vectors, n_firms=500, n_years=20, seed=212311,
+                            output_path=None, verbose=True,
+                            n_workers=None, threads_per_worker=1):
+    """Compute simulated moments for a list/array of parameter vectors.
+
+    Parameters
+    ----------
+    param_vectors : array-like, shape (n, 7)
+        Parameter order: [gamma, mu_eta, sigma_eta2, rho_omega,
+        sigma_nu2, epsilon, delta].
+    n_firms : int
+    n_years : int
+    seed : int
+    output_path : str/Path or None
+        If provided, writes the output DataFrame to CSV.
+    verbose : bool
+    n_workers : int or None
+        Number of worker processes.  None → use os.cpu_count() (all logical
+        cores).  Set to 1 to stay single-process (no subprocess overhead).
+    threads_per_worker : int
+        Numba threads per worker process.  Default 1.  The product
+        n_workers * threads_per_worker should not exceed the available
+        logical cores to avoid over-subscription.
+
+    Returns
+    -------
+    pd.DataFrame with columns:
+      γ, μη, ση2, ρω, σν2, ϵ, δ,
+      avg_isr, var_log1p_isr, avg_gross_margin, γ_OLS, ρ_ω, σ_η2,
+      avg_opex_sales, any_inventory_above_grid, failed
+    """
+    import os
+    import pandas as pd
+    from concurrent.futures import ProcessPoolExecutor
+
+    theta = np.asarray(param_vectors, dtype=np.float64)
+    if theta.ndim != 2 or theta.shape[1] != 7:
+        raise ValueError("param_vectors must have shape (n, 7)")
+
+    n_total = theta.shape[0]
+
+    # Determine actual worker count
+    max_available = os.cpu_count() or 1
+    if n_workers is None:
+        n_workers = max_available
+    n_workers = max(1, min(n_workers, max_available, n_total))
+
+    if verbose:
+        print(f"  Workers: {n_workers}  threads_per_worker: {threads_per_worker}"
+              f"  (logical cores available: {max_available})")
+
+    jobs = [
+        (i, theta[i], n_firms, n_years, seed, threads_per_worker)
+        for i in range(n_total)
+    ]
+
+    if n_workers == 1:
+        # Serial path — avoid ProcessPoolExecutor overhead
+        results = []
+        for job in jobs:
+            results.append(_grid_worker(job))
+            i = job[0]
+            if verbose and ((i + 1) % 50 == 0 or i + 1 == n_total):
+                n_ok = sum(1 for _, r in results if not r["failed"])
+                done = i + 1
+                print(f"  [{done:4d}/{n_total}] complete  "
+                      f"(success={n_ok}, failed={done - n_ok})")
+    else:
+        # Parallel path
+        results_unordered = []
+        with ProcessPoolExecutor(max_workers=n_workers) as pool:
+            for i, row in pool.map(_grid_worker, jobs):
+                results_unordered.append((i, row))
+                if verbose and (len(results_unordered) % 50 == 0
+                                or len(results_unordered) == n_total):
+                    n_ok = sum(1 for _, r in results_unordered if not r["failed"])
+                    done = len(results_unordered)
+                    print(f"  [{done:4d}/{n_total}] complete  "
+                          f"(success={n_ok}, failed={done - n_ok})")
+        # Restore input order
+        results = sorted(results_unordered, key=lambda x: x[0])
+
+    rows = [row for _, row in results]
+
+    df_out = pd.DataFrame(rows)
+
+    if output_path is not None:
+        df_out.to_csv(output_path, index=False)
+
+    return df_out
+
+
+# ---------------------------------------------------------------------------
 # Step 7: Asymptotic variance of II estimates
 # ---------------------------------------------------------------------------
 
@@ -652,7 +798,7 @@ def _moment_vector_from_params(params, n_firms, n_years, seed, maxiter=1000):
     )
     return np.array([
         m["avg_isr"], m["var_log1p_isr"], m["avg_gross_margin"],
-        m["γ_OLS"],   m["ρ_ω"],          m["σ_η2"],            m["μ_η"],
+        m["γ_OLS"],   m["ρ_ω"],          m["σ_η2"],            m["avg_opex_sales"],
     ])
 
 
@@ -675,7 +821,7 @@ def compute_ii_jacobian(params_hat, n_firms=5000, n_years=20, seed=212311,
     Uses central differences with step sizes matching the Julia implementation.
 
     Parameter order: [γ, μη, ση2, ρω, σν2, ϵ, δ]
-    Moment order:    [avg_isr, var_log1p_isr, avg_gross_margin, γ_OLS, ρ_ω, σ_η2, μ_η]
+    Moment order:    [avg_isr, var_log1p_isr, avg_gross_margin, γ_OLS, ρ_ω, σ_η2, avg_opex_sales]
 
     Returns
     -------
