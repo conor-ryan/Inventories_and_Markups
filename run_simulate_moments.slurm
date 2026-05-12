@@ -52,14 +52,6 @@ if [[ "${SLURM_ARRAY_TASK_ID}" == "${SLURM_ARRAY_TASK_COUNT}" ]]; then
            --nodes=1 --ntasks=1 --cpus-per-task=1 --mem=4G \
            --account=econ_crch_research \
            --partition=basic \
-           --wrap="${JULIA_BIN} --project=Code -e '
-using DataFrames, CSV
-files = sort(filter(f -> occursin(r\"moments_\\d+\\.csv\", f),
-                    readdir(\"SimulatedData\", join=true)))
-isempty(files) && error(\"No chunk files found in SimulatedData/\")
-df = vcat(CSV.read.(files, DataFrame)...)
-CSV.write(\"SimulatedData/moments.csv\", df)
-println(\"Concatenated \$(length(files)) files → SimulatedData/moments.csv (\$(nrow(df)) rows)\")
-'"
+           --wrap="${JULIA_BIN} Code/concat_moments.jl"
     echo "Concatenation job submitted (depends on array job ${SLURM_ARRAY_JOB_ID})."
 fi

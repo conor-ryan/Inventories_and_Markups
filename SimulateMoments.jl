@@ -12,7 +12,7 @@ include("EstimationFunctions.jl")
 ση2_bounds = (0.025, 0.15)
 ρ_bounds   = (0.0, 0.9)
 
-n_param_points = 20000
+n_param_points = 2000
 param_bounds = [
     γ_bounds,
     μη_bounds,
