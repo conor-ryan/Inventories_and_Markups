@@ -45,10 +45,10 @@ numba.set_num_threads(args.n_threads)
 from model_functions import Parameters, solve_value_function
 from estimation_functions import (
     simulate_all_moments,
-    select_best_grid_start,
     estimate_params_ii_full,
     compute_ii_asymptotic_variance,
 )
+from global_max import tiktak
 
 
 # ---------------------------------------------------------------------------
@@ -127,37 +127,33 @@ def main():
         print(f"  {k:22s} = {target_moments[k]:.6f}")
 
     # ------------------------------------------------------------------
-    # 2. Warm-start from best grid point
-    # ------------------------------------------------------------------
-    start      = select_best_grid_start(df_grid, target_moments, W)
-    init_guess = [start["gamma"], start["mu_eta"], start["sigma_eta2"],
-                  start["rho_omega"], start["sigma_nu2"], start["epsilon"],
-                  start["delta"]]
-    print(f"\nWarm-start: best grid point  (obj = {start['obj_value']:.6f})")
-
-    # ------------------------------------------------------------------
     # 3. Estimate
     # ------------------------------------------------------------------
-    print("\nRunning estimation ...")
+    print("\nRunning Tik-Tak estimation ...")
     import time
     t0 = time.perf_counter()
-    ii_result = estimate_params_ii_full(
+    ii_result = tiktak(
+        df_grid,
         target_moments,
-        init_guess,
         W,
         params_base=PARAMS_BASE,
         n_firms=500,
         n_years=20,
         seed=212311,
         max_iter=5000,
-        simplex_scale=0.15,
-        n_restarts=1,
+        n_iterations=10,
+        alpha_min=0.1,
         verbose=False,
+        method="bobyqa",
+        tol=1e-2,
+        tol_final=1e-5,
     )
     t_est = time.perf_counter() - t0
     print(f"  Estimation wall time : {t_est:.1f}s")
-    print(f"  Converged            : {ii_result['result'].success}")
     print(f"  Objective            : {ii_result['obj_value']:.8f}")
+    print("  Tik-Tak history:")
+    for rec in ii_result["tiktak_history"]:
+        print(f"    iter {str(rec[0]):>5s}  obj={rec[1]:.8f}  alpha={rec[2]:.3f}")
 
     # ------------------------------------------------------------------
     # 4. Standard errors
@@ -197,8 +193,6 @@ def main():
     # Scalar diagnostics as extra rows
     rows.append({"parameter": "obj_value",  "true_value": float("nan"),
                  "estimate": ii_result["obj_value"], "std_error": float("nan")})
-    rows.append({"parameter": "converged",  "true_value": float("nan"),
-                 "estimate": float(ii_result["result"].success), "std_error": float("nan")})
 
     df_out = pd.DataFrame(rows)
     df_out.to_csv(output_path, index=False)

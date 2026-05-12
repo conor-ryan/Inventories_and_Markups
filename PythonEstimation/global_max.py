@@ -1,414 +1,226 @@
 """global_max.py
 
-Two surrogate warm-start methods for indirect inference estimation, using a
-pre-computed grid of (parameter, simulated-moment) pairs.
+Tik-Tak global optimization algorithm (Guvenen et al.) for the II estimator.
 
-Methods
--------
-softmin_warm_start
-    Boltzmann-weighted centroid of the n_top best grid points.
-    Stays strictly inside the convex hull of the selected points so it can
-    never land on a global parameter bound.  Recommended default.
+Uses pre-computed grid moments from moments.csv as tik points.  The
+algorithm ranks all valid grid rows by the II objective, then runs a local
+BOBYQA solve from each of the top-K mixture points:
 
-quadratic_warm_start
-    Fits a full quadratic surrogate in *normalised* parameter space to the
-    n_top best grid points and returns the analytic minimum, clipped to the
-    bounding box of those points (the "trust region").
-    Requires n_top ≫ 36 (number of quadratic features for 7 parameters).
+    x_start_k = (1 - alpha_k) * x_best + alpha_k * x_tik_k
 
-Usage
------
-    from global_max import softmin_warm_start, quadratic_warm_start
-    guess, info = softmin_warm_start(df_grid, target_moments, W)
+where alpha_k decreases linearly from 1 (pure tik point) to alpha_min
+(mostly current best).  x_best is updated whenever a local solve improves
+the objective.
+
+Only 10 local solves are performed (n_iterations=10) because each local
+evaluation is expensive.
 """
-
-import warnings
 
 import numpy as np
 import pandas as pd
 
-# ---------------------------------------------------------------------------
-# Column names matching SimulateMoments.jl / compute_moments_on_grid output
-# ---------------------------------------------------------------------------
-PARAM_COLS  = ["γ", "μη", "ση2", "ρω", "σν2", "ϵ", "δ"]
-PARAM_NAMES = ["gamma", "mu_eta", "sigma_eta2", "rho_omega",
-               "sigma_nu2", "epsilon", "delta"]
-MOMENT_COLS = ["avg_isr", "var_log1p_isr", "avg_gross_margin",
-               "γ_OLS", "ρ_ω", "σ_η2", "avg_opex_sales"]
+from estimation_functions import (
+    _BOUNDS,
+    estimate_params_ii_full,
+)
 
-_BOUNDS = {
-    "gamma":      (0.05,   3.0),
-    "mu_eta":     (-5.0,   5.0),
-    "sigma_eta2": (1e-6,   5.0),
-    "rho_omega":  (-0.999, 0.999),
-    "sigma_nu2":  (1e-6,   5.0),
-    "epsilon":    (1.1,    20.0),
-    "delta":      (0.001,  0.999),
-}
-
-_N_PARAMS    = len(PARAM_COLS)                                          # 7
-_N_QUAD_FEAT = 1 + _N_PARAMS + _N_PARAMS * (_N_PARAMS + 1) // 2       # 36
+# Canonical parameter order (must match estimate_params_ii_full)
+_PARAM_KEYS  = ["gamma", "mu_eta", "sigma_eta2", "rho_omega",
+                "sigma_nu2", "epsilon", "delta"]
+# Corresponding column names in moments.csv
+_GRID_COLS   = ["γ", "μη", "ση2", "ρω", "σν2", "ϵ", "δ"]
+_MOMENT_COLS = ["avg_isr", "var_log1p_isr", "avg_gross_margin",
+                "γ_OLS", "ρ_ω", "σ_η2", "avg_opex_sales"]
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _compute_objectives(df_grid, target_moments, W):
-    """Vectorised weighted-II objective for all non-failed grid rows.
+def _compute_grid_objectives(df_grid, target_moments, W):
+    """Compute the II objective at every valid grid row.
 
-    Returns
-    -------
-    ok_rows : pd.DataFrame — non-failed rows with reset integer index
-    obj     : (n_ok,) array — objective for each row of ok_rows
+    Returns df_grid rows with an added ``obj_value`` column, sorted
+    ascending (best first).
     """
-    m_hat   = np.array([target_moments[k] for k in MOMENT_COLS])
-    ok      = ~df_grid["failed"].astype(bool)
-    ok      = ok & ~df_grid[MOMENT_COLS].isna().any(axis=1)
-    ok      = ok & ~np.isinf(df_grid[MOMENT_COLS].to_numpy(dtype=np.float64)).any(axis=1)
-    ok_rows = df_grid[ok].reset_index(drop=True)
-    M       = ok_rows[MOMENT_COLS].to_numpy(dtype=np.float64)
-    diff    = m_hat[None, :] - M
-    obj     = np.einsum("ni,ij,nj->n", diff, W, diff)
-    return ok_rows, obj
+    m_hat = np.array([target_moments[col] for col in _MOMENT_COLS])
+
+    ok = ~df_grid["failed"].astype(bool)
+    ok &= ~df_grid[_MOMENT_COLS].isna().any(axis=1)
+    ok &= ~np.isinf(df_grid[_MOMENT_COLS].to_numpy(dtype=float)).any(axis=1)
+
+    df_ok = df_grid.loc[ok].copy()
+    M_all = df_ok[_MOMENT_COLS].to_numpy(dtype=np.float64)
+
+    diff    = m_hat[None, :] - M_all
+    obj_all = np.einsum("ni,ij,nj->n", diff, W, diff)
+
+    df_ok["obj_value"] = obj_all
+    return df_ok.sort_values("obj_value").reset_index(drop=True)
 
 
-def _select_top(ok_rows, obj, n_top):
-    """Return (theta_mat, y) for the n_top lowest-objective rows."""
-    n_use     = min(n_top, len(obj))
-    order     = np.argsort(obj)[:n_use]
-    theta_mat = ok_rows.iloc[order][PARAM_COLS].to_numpy(dtype=np.float64)
-    y         = obj[order]
-    return theta_mat, y
+def _grid_row_to_theta(row):
+    """Extract a structural parameter vector from a grid DataFrame row."""
+    return np.array([float(row[col]) for col in _GRID_COLS])
 
 
-def _build_quad_features(theta_norm):
-    """Build full quadratic design matrix with intercept.
-
-    For n_params = 7:  1 + 7 + 28 = 36 columns.
-
-    Parameters
-    ----------
-    theta_norm : (n, 7) *normalised* parameter matrix
-
-    Returns
-    -------
-    X        : (n, 36) design matrix
-    quad_idx : list of (i, j) pairs, one per quadratic column
-    """
-    n, p = theta_norm.shape
-    cols = [np.ones((n, 1)), theta_norm]
-    quad_idx = []
-    for i in range(p):
-        for j in range(i, p):
-            cols.append((theta_norm[:, i] * theta_norm[:, j])[:, None])
-            quad_idx.append((i, j))
-    return np.hstack(cols), quad_idx
+def _clip_to_interior(x):
+    """Clip x strictly inside _BOUNDS with the same margin used by BOBYQA."""
+    bounds = np.array([_BOUNDS[k] for k in _PARAM_KEYS], dtype=np.float64)
+    lb, ub = bounds[:, 0], bounds[:, 1]
+    rhobeg = 0.1 * float(np.min(ub - lb))
+    return np.clip(x, lb + rhobeg, ub - rhobeg)
 
 
 # ---------------------------------------------------------------------------
-# Public API — Softmin centroid
+# Tik-Tak
 # ---------------------------------------------------------------------------
 
-def softmin_warm_start(df_grid, target_moments, W, n_top=500, verbose=True):
-    """Boltzmann-weighted centroid of the n_top lowest-objective grid points.
-
-    Algorithm
-    ---------
-    1. Compute the weighted-II objective for all non-failed grid rows.
-    2. Select the n_top rows with the lowest objective.
-    3. Compute Boltzmann weights w_i ∝ exp(−λ (obj_i − obj_min)), where λ is
-       chosen adaptively so the best point receives e⁴ ≈ 55× more weight than
-       the median of the n_top points.
-    4. Return the weighted centroid θ* = Σ w_i θ_i.
-
-    θ* is always inside the convex hull of the selected points, so it can
-    never land on a global parameter bound.
+def tiktak(
+    df_grid,
+    target_moments,
+    W,
+    params_base,
+    n_firms=500,
+    n_years=20,
+    seed=212311,
+    max_iter=1000,
+    n_iterations=10,
+    alpha_min=0.1,
+    verbose=True,
+    method="nelder-mead",
+    tol=1e-2,
+    tol_final=1e-5,
+):
+    """Tik-Tak global optimization for the II estimator.
 
     Parameters
     ----------
-    df_grid        : pd.DataFrame with PARAM_COLS + MOMENT_COLS + "failed"
-    target_moments : dict keyed by MOMENT_COLS
+    df_grid        : pd.DataFrame — moments.csv with pre-computed moments
+    target_moments : dict — target moment values
     W              : (7, 7) weighting matrix
-    n_top          : int — number of best grid points to include
+    params_base    : Parameters — supplies fixed fields (c, fc, beta, ns, size)
+    n_firms        : int
+    n_years        : int
+    seed           : int
+    max_iter       : int — BOBYQA function-evaluation budget per local solve
+    n_iterations   : int — number of Tik-Tak iterations (default 10)
+    alpha_min      : float — weight on tik point in the final iteration
+                     (default 0.1; 1.0 in the first iteration)
     verbose        : bool
 
     Returns
     -------
-    init_guess : length-7 list [gamma, mu_eta, sigma_eta2, rho_omega,
-                 sigma_nu2, epsilon, delta]
-    info : dict — theta_star, theta_grid_best, obj_grid_best,
-                  lambda_, effective_n, n_fit
+    dict — same keys as ``estimate_params_ii_full``, plus
+        ``tiktak_history`` : list of (iteration, obj_value, alpha) tuples
     """
-    ok_rows, obj         = _compute_objectives(df_grid, target_moments, W)
-    theta_mat, y         = _select_top(ok_rows, obj, n_top)
-    n_use                = len(y)
-    obj_grid_best        = float(y[0])
-    theta_grid_best      = theta_mat[0].copy()
-
-    obj_min    = float(y[0])
-    obj_median = float(np.median(y))
-    spread     = obj_median - obj_min
-
-    if spread > 1e-12:
-        lam = 4.0 / spread   # top-1 gets e^4 ≈ 55× weight of median
-    else:
-        lam = 0.0            # degenerate: uniform centroid
-
-    log_w  = -lam * (y - obj_min)
-    log_w -= log_w.max()     # numerical stability
-    w      = np.exp(log_w)
-    w     /= w.sum()
-
-    theta_star  = (w[:, None] * theta_mat).sum(axis=0)
-    effective_n = float(1.0 / np.sum(w ** 2))
-
-    if verbose:
-        print(f"Softmin centroid: n_top={n_use},  eff_n={effective_n:.1f},  "
-              f"λ={lam:.4g}")
-        print(f"  objective at grid best = {obj_grid_best:.6f}")
-
-    info = {
-        "theta_star":      theta_star,
-        "theta_grid_best": theta_grid_best,
-        "obj_grid_best":   obj_grid_best,
-        "lambda_":         lam,
-        "effective_n":     effective_n,
-        "n_fit":           n_use,
-    }
-    return list(theta_star), info
-
-
-# ---------------------------------------------------------------------------
-# Public API — Trust-region quadratic
-# ---------------------------------------------------------------------------
-
-def quadratic_warm_start(df_grid, target_moments, W, n_top=500, verbose=True):
-    """Quadratic surrogate warm-start with normalisation and trust-region clipping.
-
-    Why the naive version goes to the bounds
-    -----------------------------------------
-    The 7 parameters have very different magnitudes (delta ≈ 0.01, epsilon ≈ 8,
-    mu_eta ≈ −4.6 …).  Without normalisation the quadratic OLS is poorly
-    conditioned and the fitted minimum can be far outside the data cloud,
-    causing clipping to the global bounds.
-
-    Fixes applied here
-    ------------------
-    1. *Normalise*: z-score each parameter dimension within the selected top-k
-       set before OLS, giving equal weight to all directions.
-    2. *Trust-region clip*: clip θ* to the axis-aligned bounding box of the
-       selected top-k points, not to the global _BOUNDS.  The quadratic is
-       only meaningful inside the region where the grid data are dense.
-    3. *Fallback*: if the Hessian is not PD (non-convex surrogate), the nearest
-       PD matrix (eigenvalue clamping) is used.
-
-    Minimum recommended n_top: ~180 (≥5× the 36 quadratic features for 7
-    parameters).  With n_top = 50 there are only 14 residual df.
-
-    Parameters
-    ----------
-    df_grid        : pd.DataFrame with PARAM_COLS + MOMENT_COLS + "failed"
-    target_moments : dict keyed by MOMENT_COLS
-    W              : (7, 7) weighting matrix
-    n_top          : int
-    verbose        : bool
-
-    Returns
-    -------
-    init_guess : length-7 list
-    info : dict — theta_star, theta_grid_best, obj_grid_best,
-                  obj_surrogate, r2, n_fit, hessian_pd, trust_region_active
-    """
-    ok_rows, obj    = _compute_objectives(df_grid, target_moments, W)
-    theta_mat, y    = _select_top(ok_rows, obj, n_top)
-    n_use           = len(y)
-
-    if n_use < _N_QUAD_FEAT + 1:
-        warnings.warn(
-            f"quadratic_warm_start: only {n_use} valid points, but the "
-            f"quadratic has {_N_QUAD_FEAT} features.  Increase n_top or use "
-            "softmin_warm_start instead.",
-            stacklevel=2,
+    # --- Rank grid points ---
+    df_sorted = _compute_grid_objectives(df_grid, target_moments, W)
+    if len(df_sorted) < n_iterations:
+        raise ValueError(
+            f"Grid has only {len(df_sorted)} valid rows; "
+            f"need at least n_iterations={n_iterations}."
         )
 
-    obj_grid_best   = float(y[0])
-    theta_grid_best = theta_mat[0].copy()
+    if verbose:
+        print("=== Tik-Tak Global Optimization ===")
+        print(f"  Valid grid rows : {len(df_sorted)}")
+        print(f"  Iterations      : {n_iterations}")
+        print(f"  Best grid obj   : {df_sorted['obj_value'].iloc[0]:.6f}")
+        print()
 
-    # Trust region: bounding box of the n_top selected points
-    tr_lo = theta_mat.min(axis=0)
-    tr_hi = theta_mat.max(axis=0)
+    # --- Initialise from best grid point ---
+    x_best   = _clip_to_interior(_grid_row_to_theta(df_sorted.iloc[0]))
+    obj_best = float(df_sorted["obj_value"].iloc[0])
+    best_result = None
+    history = []
 
-    # Normalise to zero mean, unit SD within the top-k set.
-    # Essential when parameters differ by orders of magnitude.
-    mu_fit   = theta_mat.mean(axis=0)
-    std_fit  = theta_mat.std(axis=0)
-    std_fit  = np.where(std_fit < 1e-10, 1.0, std_fit)
-    theta_norm = (theta_mat - mu_fit) / std_fit
-
-    # Quadratic OLS in normalised space
-    X, quad_idx = _build_quad_features(theta_norm)
-    coeffs, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
-
-    y_hat  = X @ coeffs
-    ss_res = float(np.sum((y - y_hat) ** 2))
-    ss_tot = float(np.sum((y - y.mean()) ** 2))
-    r2     = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
-
-    # Extract Hessian H and linear gradient α in normalised space
-    # f(θ̃) = c + α'θ̃ + Σ_{i≤j} β_{ij} θ̃_i θ̃_j
-    alpha_lin = coeffs[1 : 1 + _N_PARAMS]
-    H = np.zeros((_N_PARAMS, _N_PARAMS))
-    for k, (i, j) in enumerate(quad_idx):
-        b = coeffs[1 + _N_PARAMS + k]
-        if i == j:
-            H[i, i] = 2.0 * b
+    # --- Tik-Tak loop ---
+    # alpha decreases linearly: 1.0 on iteration 1, alpha_min on iteration n_iterations
+    for it in range(n_iterations):
+        if n_iterations > 1:
+            alpha = 1.0 - (1.0 - alpha_min) * it / (n_iterations - 1)
         else:
-            H[i, j] = b
-            H[j, i] = b
+            alpha = 1.0
 
-    evals      = np.linalg.eigvalsh(H)
-    hessian_pd = bool(np.all(evals > 0))
+        x_tik   = _clip_to_interior(_grid_row_to_theta(df_sorted.iloc[it]))
+        x_start = _clip_to_interior((1.0 - alpha) * x_best + alpha * x_tik)
 
-    if hessian_pd:
-        theta_norm_star = np.linalg.solve(H, -alpha_lin)
-    else:
-        evals_c, evecs = np.linalg.eigh(H)
-        H_pd = evecs @ np.diag(np.maximum(evals_c, 1e-8)) @ evecs.T
-        try:
-            theta_norm_star = np.linalg.solve(H_pd, -alpha_lin)
-        except np.linalg.LinAlgError:
-            theta_norm_star = np.zeros(_N_PARAMS)
+        if verbose:
+            print(
+                f"--- Iteration {it + 1}/{n_iterations}  "
+                f"α={alpha:.3f}  "
+                f"tik_obj={df_sorted['obj_value'].iloc[it]:.6f}  "
+                f"best_so_far={obj_best:.6f} ---"
+            )
 
-    # Back-transform to original space
-    theta_star = theta_norm_star * std_fit + mu_fit
-
-    # Clip to trust region (top-k bounding box), then global bounds as backstop
-    trust_region_active = bool(
-        np.any(theta_star < tr_lo - 1e-10) or np.any(theta_star > tr_hi + 1e-10)
-    )
-    theta_star = np.clip(theta_star, tr_lo, tr_hi)
-    for k, name in enumerate(PARAM_NAMES):
-        lo, hi = _BOUNDS[name]
-        theta_star[k] = float(np.clip(theta_star[k], lo, hi))
-
-    # Evaluate surrogate at the (now clipped) θ*
-    theta_norm_eval = (theta_star - mu_fit) / std_fit
-    X_star = np.concatenate(
-        [[1.0], theta_norm_eval,
-         [theta_norm_eval[qi] * theta_norm_eval[qj] for qi, qj in quad_idx]]
-    )
-    obj_surrogate = float(coeffs @ X_star)
-
-    if verbose:
-        tr_str = " [trust-region boundary active]" if trust_region_active else ""
-        print(f"Quadratic surrogate: R²={r2:.4f},  n_fit={n_use},  "
-              f"Hessian PD={hessian_pd}{tr_str}")
-        print(f"  objective at grid best = {obj_grid_best:.6f}")
-        print(f"  surrogate at θ*        = {obj_surrogate:.6f}")
-    elif trust_region_active:
-        warnings.warn(
-            "quadratic_warm_start: analytic minimum is outside the top-k "
-            "bounding box — clipped to trust region.  "
-            "Consider softmin_warm_start instead.",
-            stacklevel=2,
+        result = estimate_params_ii_full(
+            target_moments,
+            list(x_start),
+            W,
+            params_base=params_base,
+            n_firms=n_firms,
+            n_years=n_years,
+            seed=seed,
+            max_iter=max_iter,
+            verbose=verbose,
+            n_restarts=0,
+            method=method,
+            tol=tol,
         )
 
-    info = {
-        "theta_star":          theta_star,
-        "theta_grid_best":     theta_grid_best,
-        "obj_grid_best":       obj_grid_best,
-        "obj_surrogate":       obj_surrogate,
-        "r2":                  r2,
-        "n_fit":               n_use,
-        "hessian_pd":          hessian_pd,
-        "trust_region_active": trust_region_active,
-    }
-    return list(theta_star), info
+        history.append((it + 1, result["obj_value"], alpha))
 
+        if result["obj_value"] < obj_best:
+            obj_best    = result["obj_value"]
+            x_best      = _clip_to_interior(
+                np.array([result[pname] for pname in _PARAM_KEYS])
+            )
+            best_result = result
+            if verbose:
+                print(f"  *** New best: {obj_best:.8f} ***")
+        elif verbose:
+            print(f"  No improvement (obj={result['obj_value']:.8f})")
 
-# ---------------------------------------------------------------------------
-# Public API — Focused Latin Hypercube Sampling
-# ---------------------------------------------------------------------------
+    # Guard: if no iteration improved over the grid, use the last result
+    if best_result is None:
+        best_result = result
 
-def focused_lhs_search(df_grid, target_moments, W, n_top=50, n_sample=20,
-                       tail_pct=0.10, seed=None):
-    """Latin Hypercube sample within the parameter neighbourhood of the grid optimum.
+    # --- Final polish at best point with tight tolerance ---
+    if verbose:
+        print(f"\n--- Final polish (tol={tol_final}) at best point (obj={obj_best:.8f}) ---")
 
-    Algorithm
-    ---------
-    1. Compute the weighted-II objective for all non-failed grid rows.
-    2. Select the n_top rows with the lowest objective.
-    3. For each parameter dimension compute the tail_pct–(1−tail_pct) quantile
-       range across those n_top points.  This gives a tight “promising box”
-       that discards outlier corners of the top-k bounding box.
-    4. Draw n_sample points via Latin Hypercube Sampling inside that box.
-       LHS divides each dimension into n_sample equal-width slices and draws
-       exactly one point from each slice, with slices randomly matched across
-       dimensions.  This guarantees even marginal coverage with no clustering
-       — far better than pure random for small n_sample.
+    x_final = _clip_to_interior(np.array([best_result[pname] for pname in _PARAM_KEYS]))
+    final_result = estimate_params_ii_full(
+        target_moments,
+        list(x_final),
+        W,
+        params_base=params_base,
+        n_firms=n_firms,
+        n_years=n_years,
+        seed=seed,
+        max_iter=max_iter,
+        verbose=verbose,
+        n_restarts=0,
+        method=method,
+        tol=tol_final,
+    )
+    history.append(("final", final_result["obj_value"], 0.0))
 
-    No model solves are performed here; the caller evaluates each proposal.
+    if final_result["obj_value"] < obj_best:
+        obj_best    = final_result["obj_value"]
+        best_result = final_result
+        if verbose:
+            print(f"  *** Final polish improved: {obj_best:.8f} ***")
+    elif verbose:
+        print(f"  Final polish did not improve (obj={final_result['obj_value']:.8f})")
 
-    Parameters
-    ----------
-    df_grid        : pd.DataFrame
-    target_moments : dict
-    W              : (7, 7) weighting matrix
-    n_top          : int   — number of best grid points used to define the box
-    n_sample       : int   — number of LHS proposals to generate
-    tail_pct       : float — quantile fraction to trim from each edge of the
-                     top-k bounding box (0.10 = use 10th–90th percentile)
-    seed           : int or None
+    best_result["tiktak_history"] = history
 
-    Returns
-    -------
-    proposals : list of n_sample length-7 lists
-                [gamma, mu_eta, sigma_eta2, rho_omega, sigma_nu2, epsilon, delta]
-    info : dict — lo, hi (per-parameter bounds used), obj_grid_best, n_top_used
-    """
-    ok_rows, obj  = _compute_objectives(df_grid, target_moments, W)
-    theta_mat, y  = _select_top(ok_rows, obj, n_top)
-    n_use         = len(y)
-    obj_grid_best = float(y[0])
+    if verbose:
+        print("\n=== Tik-Tak Complete ===")
+        print(f"  Best objective: {obj_best:.8f}")
+        for pname in _PARAM_KEYS:
+            print(f"  {pname:12s} = {best_result[pname]:.6f}")
 
-    # Quantile-trimmed bounding box
-    q_lo = float(np.clip(tail_pct, 0.0, 0.49))
-    q_hi = 1.0 - q_lo
-    if n_use >= 4:
-        lo = np.quantile(theta_mat, q_lo, axis=0)
-        hi = np.quantile(theta_mat, q_hi, axis=0)
-    else:
-        lo = theta_mat.min(axis=0)
-        hi = theta_mat.max(axis=0)
-
-    # Ensure non-degenerate intervals; fall back to 0.5% of global range
-    for k, name in enumerate(PARAM_NAMES):
-        g_lo, g_hi = _BOUNDS[name]
-        if hi[k] <= lo[k] + 1e-10:
-            mid   = 0.5 * (lo[k] + hi[k])
-            gap   = 0.005 * (g_hi - g_lo)
-            lo[k] = max(g_lo, mid - gap)
-            hi[k] = min(g_hi, mid + gap)
-
-    # Latin Hypercube Sample
-    rng     = np.random.default_rng(seed)
-    samples = np.zeros((n_sample, _N_PARAMS))
-    for j in range(_N_PARAMS):
-        perm           = rng.permutation(n_sample)
-        u              = (perm + rng.random(n_sample)) / n_sample  # uniform (0,1)
-        samples[:, j]  = lo[j] + u * (hi[j] - lo[j])
-
-    # Backstop: clip to global bounds
-    for k, name in enumerate(PARAM_NAMES):
-        g_lo, g_hi    = _BOUNDS[name]
-        samples[:, k] = np.clip(samples[:, k], g_lo, g_hi)
-
-    proposals = [list(samples[i]) for i in range(n_sample)]
-    info = {
-        "lo":            lo,
-        "hi":            hi,
-        "obj_grid_best": obj_grid_best,
-        "n_top_used":    n_use,
-    }
-    return proposals, info
+    return best_result

@@ -7,6 +7,7 @@ in README.md.
 Stage 1 (solve_value_function) lives in model_functions.py.
 """
 
+import math
 import numpy as np
 from numba import jit, prange
 
@@ -231,7 +232,7 @@ def estimate_omega_ar1(log_omega_proxy_panel):
     return mu_eta, sigma_eta2, rho_omega
 
 
-def compute_annual_auxiliary(tot_opex, tot_sales):
+def compute_annual_auxiliary(tot_opex, tot_sales, tot_rev):
     """OLS gamma + AR(1) omega from annual aggregates.
 
     Replicates EstimationFunctions.jl::compute_annual_auxiliary, using
@@ -241,6 +242,7 @@ def compute_annual_auxiliary(tot_opex, tot_sales):
     ----------
     tot_opex  : (n_firms, n_years) float64 — total annual operating expenses
     tot_sales : (n_firms, n_years) float64 — total annual sales quantity
+    tot_rev   : (n_firms, n_years) float64 — total annual revenue
 
     Returns
     -------
@@ -262,8 +264,8 @@ def compute_annual_auxiliary(tot_opex, tot_sales):
 
     mu_eta, sigma_eta2, rho_omega = estimate_omega_ar1(log_omega_panel)
 
-    valid_os = (tot_opex > 0.0) & (tot_sales > 0.0)
-    avg_opex_sales = float((tot_opex[valid_os] / tot_sales[valid_os]).mean())
+    valid_os = (tot_opex > 0.0) & (tot_rev > 0.0)
+    avg_opex_sales = float((tot_opex[valid_os] / tot_rev[valid_os]).mean())
 
     return {"γ_OLS": gamma_OLS, "ρ_ω": rho_omega,
             "σ_η2": sigma_eta2, "avg_opex_sales": avg_opex_sales}
@@ -332,12 +334,14 @@ def simulate_all_moments(params, p_policy, n_policy, n_firms, n_years, seed, bur
     # Annual aggregation: reshape (n_firms, n_years, 12) then sum over months
     tot_opex  = exp_out.reshape(n_firms, n_years, 12).sum(axis=2)   # (n_firms, n_years)
     tot_sales = dem_out.reshape(n_firms, n_years, 12).sum(axis=2)
+    tot_rev   = rev_out.reshape(n_firms, n_years, 12).sum(axis=2)
 
     # Drop zero entries before log (shouldn't occur in practice)
     valid_ann = (tot_opex > 0.0) & (tot_sales > 0.0)
     ann = compute_annual_auxiliary(
         np.where(valid_ann, tot_opex,  1.0),
         np.where(valid_ann, tot_sales, 1.0),
+        np.where(valid_ann, tot_rev,   1.0),
     )
 
     return {
@@ -357,14 +361,15 @@ def simulate_all_moments(params, p_policy, n_policy, n_firms, n_years, seed, bur
 # ---------------------------------------------------------------------------
 
 # Bounds (used by both pack and unpack)
+# Must match simulate_moments_main.py / SimulateMoments.jl
 _BOUNDS = {
-    "gamma":      (0.05,   3.0),
-    "mu_eta":     (-5.0,   5.0),
-    "sigma_eta2": (1e-6,   5.0),
-    "rho_omega":  (-0.999, 0.999),
-    "sigma_nu2":  (1e-6,   5.0),
-    "epsilon":    (1.1,    20.0),
-    "delta":      (0.001,  0.999),
+    "gamma":      (0.5,              1.25),
+    "mu_eta":     (math.log(0.0001), math.log(0.5)),
+    "sigma_eta2": (0.025,            0.15),
+    "rho_omega":  (0.0,              0.9),
+    "sigma_nu2":  (0.01,             0.3),
+    "epsilon":    (4.0,              20.0),
+    "delta":      (0.005,            0.1),
 }
 
 
@@ -422,6 +427,8 @@ def estimate_params_ii_full(
     verbose=True,
     simplex_scale=0.15,
     n_restarts=1,
+    method="nelder-mead",
+    tol=1e-4,
 ):
     """Indirect inference estimator for 7 structural parameters.
 
@@ -463,11 +470,24 @@ def estimate_params_ii_full(
         target_moments["avg_opex_sales"],
     ])
 
+    method_key = str(method).strip().lower()
+    valid_methods = {"nelder-mead", "bobyqa", "cma-es"}
+    if method_key not in valid_methods:
+        raise ValueError(
+            f"Unknown method '{method}'. Expected one of {sorted(valid_methods)}"
+        )
+
     iter_count = [0]
 
     def objective(x):
         iter_count[0] += 1
-        gamma, mu_eta, sigma_eta2, rho_omega, sigma_nu2, epsilon, delta = _unpack(x)
+        if method_key == "bobyqa":
+            gamma, mu_eta, sigma_eta2, rho_omega, sigma_nu2, epsilon, delta = (
+                float(x[0]), float(x[1]), float(x[2]), float(x[3]),
+                float(x[4]), float(x[5]), float(x[6]),
+            )
+        else:
+            gamma, mu_eta, sigma_eta2, rho_omega, sigma_nu2, epsilon, delta = _unpack(x)
         try:
             p = Parameters(
                 c=params_base.c, fc=params_base.fc,
@@ -502,7 +522,10 @@ def estimate_params_ii_full(
         except Exception:
             return 1e10
 
-    x0 = _pack(list(init_guess))
+    if method_key == "bobyqa":
+        x0 = np.array(init_guess, dtype=np.float64)
+    else:
+        x0 = _pack(list(init_guess))
 
     def _make_simplex(x, scale):
         """Build an (n+1, n) initial simplex by perturbing each coordinate."""
@@ -520,8 +543,8 @@ def estimate_params_ii_full(
         keys = ["avg_isr","var_log1p_isr","avg_gross_margin","γ_OLS","ρ_ω","σ_η2","avg_opex_sales"]
         for k, v in zip(keys, m_hat):
             print(f"  {k:20s} = {v:10.6f}")
-        print(f"\nNelder-Mead: simplex_scale={simplex_scale}, n_restarts={n_restarts}")
-        print("\n iter | avg_isr | var_log1p | avg_gm  | gamma_OLS| rho_w   | sig_eta2 | mu_eta  | obj")
+        print(f"\nOptimizer: {method_key}, max_iter={max_iter}, n_restarts={n_restarts}")
+        print("\n iter | avg_isr | var_log1p | avg_gm  | gamma_OLS| rho_w   | sig_eta2 | opex_sales  | obj")
         print("-" * 95)
 
     x_best     = x0
@@ -531,18 +554,111 @@ def estimate_params_ii_full(
     for restart in range(n_restarts + 1):
         if verbose and restart > 0:
             print(f"\n--- Warm restart {restart} (best obj so far: {obj_best:.6f}) ---")
-        simplex = _make_simplex(x_best, simplex_scale)
-        res = minimize(
-            objective, x_best, method="Nelder-Mead",
-            options={"maxiter": max_iter, "xatol": 1e-4, "fatol": 1e-4, "disp": False,
-                     "initial_simplex": simplex},
-        )
+
+        if method_key == "nelder-mead":
+            simplex = _make_simplex(x_best, simplex_scale)
+            res = minimize(
+                objective, x_best, method="Nelder-Mead",
+                options={
+                    "maxiter": max_iter,
+                    "xatol": tol,
+                    "fatol": tol,
+                    "disp": False,
+                    "initial_simplex": simplex,
+                },
+            )
+
+        elif method_key == "bobyqa":
+            import pybobyqa
+
+            bounds = np.array([
+                _BOUNDS["gamma"],
+                _BOUNDS["mu_eta"],
+                _BOUNDS["sigma_eta2"],
+                _BOUNDS["rho_omega"],
+                _BOUNDS["sigma_nu2"],
+                _BOUNDS["epsilon"],
+                _BOUNDS["delta"],
+            ], dtype=np.float64)
+
+            lb, ub = bounds[:, 0], bounds[:, 1]
+            rhobeg = 0.1 * float(np.min(ub - lb))
+            # x0 must be strictly interior by at least rhobeg on every coordinate
+            x_bobyqa = np.clip(x_best, lb + rhobeg, ub - rhobeg)
+
+            res_bobyqa = pybobyqa.solve(
+                objective,
+                x0=x_bobyqa,
+                bounds=(lb, ub),
+                rhobeg=rhobeg,
+                rhoend=tol,
+                maxfun=max_iter,
+                seek_global_minimum=False,
+                print_progress=False,
+            )
+
+            class _BobyqaResult:
+                pass
+
+            res = _BobyqaResult()
+            res.x = np.array(res_bobyqa.x, dtype=np.float64)
+            res.fun = float(res_bobyqa.f)
+            res.success = bool(res_bobyqa.flag > 0)
+
+        else:  # method_key == "cma-es"
+            import cma
+
+            bounds = [
+                [
+                    _BOUNDS["gamma"][0],
+                    _BOUNDS["mu_eta"][0],
+                    np.log(_BOUNDS["sigma_eta2"][0]),
+                    np.arctanh(_BOUNDS["rho_omega"][0]),
+                    np.log(_BOUNDS["sigma_nu2"][0]),
+                    _BOUNDS["epsilon"][0],
+                    np.log(_BOUNDS["delta"][0] / (1.0 - _BOUNDS["delta"][0])),
+                ],
+                [
+                    _BOUNDS["gamma"][1],
+                    _BOUNDS["mu_eta"][1],
+                    np.log(_BOUNDS["sigma_eta2"][1]),
+                    np.arctanh(_BOUNDS["rho_omega"][1]),
+                    np.log(_BOUNDS["sigma_nu2"][1]),
+                    _BOUNDS["epsilon"][1],
+                    np.log(_BOUNDS["delta"][1] / (1.0 - _BOUNDS["delta"][1])),
+                ],
+            ]
+
+            sigma0 = max(simplex_scale, 1e-2)
+            opts = {
+                "maxfevals": max_iter,
+                "verbose": -9 if not verbose else 1,
+                "bounds": bounds,
+            }
+            es = cma.CMAEvolutionStrategy(np.array(x_best, dtype=np.float64), sigma0, opts)
+            es.optimize(objective)
+
+            class _CmaResult:
+                pass
+
+            res = _CmaResult()
+            res.x = np.array(es.result.xbest, dtype=np.float64)
+            res.fun = float(es.result.fbest)
+            res.success = bool(np.isfinite(res.fun))
+
         if res.fun < obj_best:
             obj_best   = res.fun
             x_best     = res.x
             opt_result = res
 
-    gamma, mu_eta, sigma_eta2, rho_omega, sigma_nu2, epsilon, delta = _unpack(opt_result.x)
+    if method_key == "bobyqa":
+        gamma, mu_eta, sigma_eta2, rho_omega, sigma_nu2, epsilon, delta = (
+            float(opt_result.x[0]), float(opt_result.x[1]), float(opt_result.x[2]),
+            float(opt_result.x[3]), float(opt_result.x[4]), float(opt_result.x[5]),
+            float(opt_result.x[6]),
+        )
+    else:
+        gamma, mu_eta, sigma_eta2, rho_omega, sigma_nu2, epsilon, delta = _unpack(opt_result.x)
 
     if verbose:
         print("\n=== Full II Estimation Complete ===")
