@@ -30,9 +30,7 @@
 set -euo pipefail
 
 # Run from the Code directory (mirrors run_simulate_moments.slurm convention).
-cd ~/work/Research/CRW_Inventory_Competition/Code
-git pull
-cd ..
+cd ~/work/Research/CRW_Inventory_Competition/
 
 module load anaconda
 conda activate inventory
