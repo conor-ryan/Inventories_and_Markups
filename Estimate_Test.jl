@@ -43,7 +43,7 @@ bootstrap_vars = bootstrap_moment_variances(df_monthly, df_annual;
 @printf("γ_OLS            = %10.6f\n", bootstrap_vars.variances.γ_OLS)
 @printf("ρ_ω              = %10.6f\n", bootstrap_vars.variances.ρ_ω)
 @printf("σ_η2             = %10.6f\n", bootstrap_vars.variances.σ_η2)
-@printf("μ_η              = %10.6f\n", bootstrap_vars.variances.μ_η)
+@printf("avg_opex_sales   = %10.6f\n", bootstrap_vars.variances.avg_opex_sales)
 
 W = inv(bootstrap_vars.vcov)
 # n = size(W,1)

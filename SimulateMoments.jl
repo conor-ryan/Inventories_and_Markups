@@ -34,7 +34,7 @@ df_out = compute_moments_on_grid(
     n_firms=500,
     n_years=20,
     seed=212311,
-    output_path="SimulatedData/moments.csv"
+    output_path="/SimulatedData/moments.csv"
 )
 
 n_ok = sum(.!df_out.failed)
@@ -52,7 +52,7 @@ else
     println("\nMoment summaries (successful simulations only):")
     println("moment, p25, median, mean, p75")
 
-    moment_cols = [:avg_isr, :var_log1p_isr, :avg_gross_margin, :γ_OLS, :ρ_ω, :σ_η2, :μ_η]
+    moment_cols = [:avg_isr, :var_log1p_isr, :avg_gross_margin, :γ_OLS, :ρ_ω, :σ_η2, :avg_opex_sales]
     for col in moment_cols
         vals = collect(skipmissing(df_success[!, col]))
         vals = vals[isfinite.(vals)]

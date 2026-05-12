@@ -14,7 +14,7 @@ include("SimulationFunctions.jl")
 ση2_bounds = (0.025, 0.15)
 ρ_bounds   = (0.0, 0.9)
 
-num_data = 50
+num_data = 5
 
 N = 500
 M = 20*12
@@ -26,7 +26,7 @@ n_boot = 100
 out_dir = joinpath(@__DIR__, "..", "SimulatedData")
 mkpath(out_dir)
 
-moment_names = [:avg_isr, :var_log1p_isr, :avg_gross_margin, :γ_OLS, :ρ_ω, :σ_η2, :μ_η]
+moment_names = [:avg_isr, :var_log1p_isr, :avg_gross_margin, :γ_OLS, :ρ_ω, :σ_η2, :avg_opex_sales]
 
 draw_uniform(rng, bounds::Tuple{Float64,Float64}) = bounds[1] + rand(rng) * (bounds[2] - bounds[1])
 
@@ -77,7 +77,7 @@ for attempt in 1:num_data
         true_params_path = joinpath(out_dir, "true_parameters_id_$(id_str).csv")
 
         target_vector = [target_moments.avg_isr, target_moments.var_log1p_isr, target_moments.avg_gross_margin,
-                         target_moments.γ_OLS, target_moments.ρ_ω, target_moments.σ_η2, target_moments.μ_η]
+                         target_moments.γ_OLS, target_moments.ρ_ω, target_moments.σ_η2, target_moments.avg_opex_sales]
         df_mom = DataFrame(moment=String.(moment_names), value=target_vector)
         CSV.write(moments_path, df_mom)
 

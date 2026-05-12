@@ -267,10 +267,10 @@ function bootstrap_moment_variances(df_monthly::DataFrame,
                               n_boot=n_boot,
                               seed=seed)
 
-    moment_names = (:avg_isr, :var_log1p_isr, :avg_gross_margin, :γ_OLS, :ρ_ω, :σ_η2, :μ_η)
+    moment_names = (:avg_isr, :var_log1p_isr, :avg_gross_margin, :γ_OLS, :ρ_ω, :σ_η2, :avg_opex_sales)
     moment_matrix = hcat([
         [draw.avg_isr, draw.var_log1p_isr, draw.avg_gross_margin,
-         draw.γ_OLS, draw.ρ_ω, draw.σ_η2, draw.μ_η]
+         draw.γ_OLS, draw.ρ_ω, draw.σ_η2, draw.avg_opex_sales]
         for draw in draws
     ]...)'
     vcov = cov(moment_matrix)
@@ -283,7 +283,7 @@ end
 
 
 @inline function _full_ii_moment_names()
-    return (:avg_isr, :var_log1p_isr, :avg_gross_margin, :γ_OLS, :ρ_ω, :σ_η2, :μ_η)
+    return (:avg_isr, :var_log1p_isr, :avg_gross_margin, :γ_OLS, :ρ_ω, :σ_η2, :avg_opex_sales)
 end
 
 """

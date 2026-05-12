@@ -100,7 +100,18 @@ function _compute_annual_auxiliary_arrays(tot_opex::Vector{Float64},
     μ_η, σ_η2, ρ_ω, se_μη, se_ση2, se_ρω =
         estimate_omega_ar1(log_ω_proxy, firm_bnd)
 
+    # Average operating expense / sales ratio (annual)
+    sum_opex_sales = 0.0
+    n_os = 0
+    @inbounds for i in 1:n
+        tot_opex[i] > 0.0 && tot_sales[i] > 0.0 || continue
+        sum_opex_sales += tot_opex[i] / tot_sales[i]
+        n_os += 1
+    end
+    avg_opex_sales = sum_opex_sales / n_os
+
     return (γ_OLS=γ_OLS, ρ_ω=ρ_ω, σ_η2=σ_η2, μ_η=μ_η,
+            avg_opex_sales=avg_opex_sales,
             se_ρω=se_ρω, se_ση2=se_ση2, se_μη=se_μη)
 end
 
@@ -222,7 +233,11 @@ function compute_annual_auxiliary(df_annual::DataFrame)
     μ_η, σ_η2, ρ_ω, se_μη, se_ση2, se_ρω =
         estimate_omega_ar1(log_ω_proxy, df_ols.firm_boundary)
 
+    valid_full = (df.total_opex .> 0) .& (df.total_sales .> 0)
+    avg_opex_sales = mean(df.total_opex[valid_full] ./ df.total_sales[valid_full])
+
     return (γ_OLS=γ_OLS, ρ_ω=ρ_ω, σ_η2=σ_η2, μ_η=μ_η,
+            avg_opex_sales=avg_opex_sales,
             se_ρω=se_ρω, se_ση2=se_ση2, se_μη=se_μη,
             ols_result=ols_result)
 end
@@ -314,7 +329,7 @@ function _simulate_all_moments(params::Parameters, ppi, opi,
     ψ̃_ann = _compute_annual_auxiliary_arrays(tot_opex, tot_sales, n_firms, n_years)
 
     return (avg_isr=avg_isr_sim, var_log1p_isr=var_log1p_isr_sim, avg_gross_margin=avg_gm_sim,
-            γ_OLS=ψ̃_ann.γ_OLS, ρ_ω=ψ̃_ann.ρ_ω, σ_η2=ψ̃_ann.σ_η2, μ_η=ψ̃_ann.μ_η,
+            γ_OLS=ψ̃_ann.γ_OLS, ρ_ω=ψ̃_ann.ρ_ω, σ_η2=ψ̃_ann.σ_η2, avg_opex_sales=ψ̃_ann.avg_opex_sales,
             any_inventory_above_grid=any_above_grid)
 end
 
@@ -324,7 +339,7 @@ end
 
 Compute the seven target moments used by the full indirect-inference objective.
 Returns a NamedTuple with fields:
-`avg_isr, var_log1p_isr, avg_gross_margin, γ_OLS, ρ_ω, σ_η2, μ_η`.
+`avg_isr, var_log1p_isr, avg_gross_margin, γ_OLS, ρ_ω, σ_η2, avg_opex_sales`.
 """
 function compute_full_ii_target_moments(df_monthly::DataFrame,
                                          df_annual::DataFrame)
@@ -337,7 +352,7 @@ function compute_full_ii_target_moments(df_monthly::DataFrame,
         γ_OLS            = ann_data.γ_OLS,
         ρ_ω              = ann_data.ρ_ω,
         σ_η2             = ann_data.σ_η2,
-        μ_η              = ann_data.μ_η
+        avg_opex_sales   = ann_data.avg_opex_sales
     )
 end
 
@@ -345,7 +360,7 @@ end
 
 @inline function _full_ii_target_vector(target_moments::NamedTuple)
     return [target_moments.avg_isr, target_moments.var_log1p_isr, target_moments.avg_gross_margin,
-            target_moments.γ_OLS, target_moments.ρ_ω, target_moments.σ_η2, target_moments.μ_η]
+            target_moments.γ_OLS, target_moments.ρ_ω, target_moments.σ_η2, target_moments.avg_opex_sales]
 end
 
 
@@ -487,7 +502,7 @@ function select_best_grid_start(df_grid::DataFrame,
 
         m̃ = [df_grid.avg_isr[i], df_grid.var_log1p_isr[i], df_grid.avg_gross_margin[i],
               df_grid.γ_OLS[i],  df_grid.ρ_ω[i],           df_grid.σ_η2[i],
-              df_grid.μ_η[i]]
+              df_grid.avg_opex_sales[i]]
         all(isfinite, m̃) || continue
 
         M = m̂ - m̃
@@ -582,9 +597,9 @@ function estimate_params_ii_full(target_moments::NamedTuple,init_guess::Abstract
         @printf("  γ_OLS (annual)   = %10.6f\n", m̂[4])
         @printf("  ρ_ω   (annual)   = %10.6f\n", m̂[5])
         @printf("  σ_η2  (annual)   = %10.6f\n", m̂[6])
-        @printf("  μ_η   (annual)   = %10.6f\n", m̂[7])
+        @printf("  opex/sales(ann)  = %10.6f\n", m̂[7])
         println("\nStarting Nelder-Mead. Iteration output shows simulated moments and objective.")
-        println("\n iter │ avg_isr │ var_log1p │ avg_gm  │  γ_OLS  │   ρ_ω   │   σ_η2  │   μ_η   │   obj")
+        println("\n iter │ avg_isr │ var_log1p │ avg_gm  │  γ_OLS  │   ρ_ω   │   σ_η2  │ opx/sls │   obj")
         println("──────┼─────────┼───────────┼─────────┼─────────┼─────────┼─────────┼─────────┼──────────")
     end
 
@@ -611,7 +626,7 @@ function estimate_params_ii_full(target_moments::NamedTuple,init_guess::Abstract
             _, _, _, _, ppi, opi, _, _ = solve_model(params_iter)
             m̃_nt = _simulate_all_moments(params_iter, ppi, opi, n_firms, n_years, seed)
             m̃ = [m̃_nt.avg_isr, m̃_nt.var_log1p_isr, m̃_nt.avg_gross_margin,
-                m̃_nt.γ_OLS, m̃_nt.ρ_ω, m̃_nt.σ_η2, m̃_nt.μ_η]
+                m̃_nt.γ_OLS, m̃_nt.ρ_ω, m̃_nt.σ_η2, m̃_nt.avg_opex_sales]
             M = m̂ - m̃
             sse = dot(M, W * M)
 
@@ -734,9 +749,9 @@ function compute_moments_on_grid(param_vectors::AbstractVector{<:AbstractVector{
     out_avg_gm   = fill(NaN, n_total)
     out_γ_ols    = fill(NaN, n_total)
     out_ρω_ar1   = fill(NaN, n_total)
-    out_σ_η2     = fill(NaN, n_total)
-    out_μη_ar1   = fill(NaN, n_total)
-    out_failed   = fill(true, n_total)
+    out_σ_η2            = fill(NaN, n_total)
+    out_avg_opex_sales  = fill(NaN, n_total)
+    out_failed          = fill(true, n_total)
     out_inventory_above_grid = fill(false, n_total)
 
     # --- Progress tracking --------------------------------------------------
@@ -776,9 +791,9 @@ function compute_moments_on_grid(param_vectors::AbstractVector{<:AbstractVector{
             out_var_log1p_isr[idx]  = m̃.var_log1p_isr
             out_avg_gm[idx]   = m̃.avg_gross_margin
             out_γ_ols[idx]    = m̃.γ_OLS
-            out_ρω_ar1[idx]   = m̃.ρ_ω
-            out_σ_η2[idx]     = m̃.σ_η2
-            out_μη_ar1[idx]   = m̃.μ_η
+            out_ρω_ar1[idx]          = m̃.ρ_ω
+            out_σ_η2[idx]            = m̃.σ_η2
+            out_avg_opex_sales[idx]  = m̃.avg_opex_sales
             out_inventory_above_grid[idx] = m̃.any_inventory_above_grid
             out_failed[idx]   = false
         catch
@@ -819,7 +834,7 @@ function compute_moments_on_grid(param_vectors::AbstractVector{<:AbstractVector{
         γ_OLS            = out_γ_ols,
         ρ_ω              = out_ρω_ar1,
         σ_η2             = out_σ_η2,
-        μ_η              = out_μη_ar1,
+        avg_opex_sales   = out_avg_opex_sales,
         any_inventory_above_grid = out_inventory_above_grid,
         failed           = out_failed)
 

@@ -12,7 +12,7 @@ grid_path = joinpath(out_dir, "moments.csv")
 results_path = joinpath(out_dir, "estimated_parameters.csv")
 seed = 212311
 sample_size = 1000
-moment_names = (:avg_isr, :var_log1p_isr, :avg_gross_margin, :γ_OLS, :ρ_ω, :σ_η2, :μ_η)
+moment_names = (:avg_isr, :var_log1p_isr, :avg_gross_margin, :γ_OLS, :ρ_ω, :σ_η2, :avg_opex_sales)
 moment_labels = String.(moment_names)
 
 println("Loading saved target moments, moment covariance matrix, and grid...")
@@ -43,7 +43,7 @@ println("Moments at best pre-computed grid point:")
 @printf("  γ_OLS            = %10.6f\n", Float64(df_grid.γ_OLS[best_row]))
 @printf("  ρ_ω              = %10.6f\n", Float64(df_grid.ρ_ω[best_row]))
 @printf("  σ_η2             = %10.6f\n", Float64(df_grid.σ_η2[best_row]))
-@printf("  μ_η              = %10.6f\n", Float64(df_grid.μ_η[best_row]))
+@printf("  avg_opex_sales   = %10.6f\n", Float64(df_grid.avg_opex_sales[best_row]))
 
 println("Estimating parameters...")
 ii_full = estimate_params_ii_full(target_moments,
