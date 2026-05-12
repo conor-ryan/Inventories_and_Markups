@@ -35,7 +35,7 @@ git pull
 cd ..
 
 module load anaconda
-conda activate crw
+conda activate inventory
 
 DATASET_ID=$(printf "%03d" ${SLURM_ARRAY_TASK_ID})
 
