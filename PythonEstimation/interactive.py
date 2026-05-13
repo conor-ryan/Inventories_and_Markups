@@ -211,7 +211,7 @@ vcov_sim_true, draws_sim_true = compute_simulation_variance(
 W_sim= np.linalg.inv(vcov_sim_true + vcov)
 
 avar_true = compute_ii_asymptotic_variance(
-    params_true, W_sim_true, n_firms=5000, n_years=20, seed=0,
+    params_true, W_sim, n_firms=5000, n_years=20, seed=0,
 )
 print("\nSimulation vcov and avar computed at true parameters.")
 
