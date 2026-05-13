@@ -264,8 +264,7 @@ def compute_annual_auxiliary(tot_opex, tot_sales, tot_rev):
 
     mu_eta, sigma_eta2, rho_omega = estimate_omega_ar1(log_omega_panel)
 
-    valid_os = (tot_opex > 0.0) & (tot_rev > 0.0)
-    avg_opex_sales = float((tot_opex[valid_os] / tot_rev[valid_os]).mean())
+    avg_opex_sales = float((tot_opex / tot_rev).mean())
 
     return {"γ_OLS": gamma_OLS, "ρ_ω": rho_omega,
             "σ_η2": sigma_eta2, "avg_opex_sales": avg_opex_sales}
@@ -336,13 +335,7 @@ def simulate_all_moments(params, p_policy, n_policy, n_firms, n_years, seed, bur
     tot_sales = dem_out.reshape(n_firms, n_years, 12).sum(axis=2)
     tot_rev   = rev_out.reshape(n_firms, n_years, 12).sum(axis=2)
 
-    # Drop zero entries before log (shouldn't occur in practice)
-    valid_ann = (tot_opex > 0.0) & (tot_sales > 0.0)
-    ann = compute_annual_auxiliary(
-        np.where(valid_ann, tot_opex,  1.0),
-        np.where(valid_ann, tot_sales, 1.0),
-        np.where(valid_ann, tot_rev,   1.0),
-    )
+    ann = compute_annual_auxiliary(tot_opex, tot_sales, tot_rev)
 
     return {
         "avg_isr":          mo["avg_isr"],
@@ -908,7 +901,7 @@ def compute_ii_asymptotic_variance(params_hat, W, n_firms=5000, n_years=20,
 
     G    = compute_ii_jacobian(params_hat, n_firms=n_firms, n_years=n_years,
                                seed=seed, maxiter=maxiter)
-    avar = np.linalg.inv(G @ W @ G.T)
+    avar = np.linalg.inv(G.T @ W @ G)
 
     eigs = np.linalg.eigvalsh(avar)
     if eigs.min() <= 0:
@@ -929,3 +922,69 @@ def compute_ii_asymptotic_variance(params_hat, W, n_firms=5000, n_years=20,
             print(f"  {name:12s}  SE = {s:.6f}")
 
     return {"G": G, "avar": avar, "vcov": vcov, "se": se}
+
+
+# ---------------------------------------------------------------------------
+# Simulation noise diagnostics
+# ---------------------------------------------------------------------------
+
+_MOMENT_KEYS = ["avg_isr", "var_log1p_isr", "avg_gross_margin",
+                "γ_OLS", "ρ_ω", "σ_η2", "avg_opex_sales"]
+
+
+def compute_simulation_variance(params, p_policy, n_policy,
+                                n_firms, n_years,
+                                n_reps=50, seed=0, verbose=True,
+                                moment_keys=_MOMENT_KEYS):
+    """Estimate the moment variance-covariance matrix by repeated simulation.
+
+    Runs `simulate_all_moments` n_reps times with independent seeds and
+    returns the (n, n) sample covariance matrix of the moments across
+    repetitions.  This is the Omega matrix needed for efficient GMM/II
+    weighting and asymptotic standard errors.
+
+    Parameters
+    ----------
+    params      : Parameters
+    p_policy    : (ns, n_omega) — price policy from solve_value_function
+    n_policy    : (ns, n_omega) — order policy from solve_value_function
+    n_firms     : int
+    n_years     : int
+    n_reps      : int — number of independent simulation draws (default 50)
+    seed        : int — base seed; repetition k uses seed + k
+    verbose     : bool — print progress
+    moment_keys : list[str] or None — moment names to include, in order.
+                  Defaults to _MOMENT_KEYS (all 7 moments).
+
+    Returns
+    -------
+    vcov : (n, n) ndarray — sample covariance matrix of the moments.
+        Row/column order matches moment_keys.
+    """
+    if moment_keys is None:
+        moment_keys = _MOMENT_KEYS
+
+    n_moments = len(moment_keys)
+    draws = np.empty((n_reps, n_moments))
+
+    for k in range(n_reps):
+        m = simulate_all_moments(
+            params, p_policy, n_policy, n_firms, n_years, seed=seed + k,
+        )
+        draws[k] = [m[key] for key in moment_keys]
+        if verbose and ((k + 1) % 10 == 0 or k + 1 == n_reps):
+            print(f"  rep {k + 1:3d}/{n_reps}")
+
+    vcov = np.cov(draws, rowvar=False, ddof=1)
+
+    if verbose:
+        print(f"\nMoment covariance matrix ({n_reps} reps, "
+              f"n_firms={n_firms}, n_years={n_years}):")
+        header = "  " + "".join(f"{k:>14s}" for k in moment_keys)
+        print(header)
+        for i, row_key in enumerate(moment_keys):
+            row_str = "  " + f"{row_key:<14s}" + "".join(f"{vcov[i, j]:14.6e}"
+                                                          for j in range(n_moments))
+            print(row_str)
+
+    return vcov, draws

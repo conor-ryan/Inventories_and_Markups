@@ -47,6 +47,8 @@ from estimation_functions import (
     simulate_all_moments,
     estimate_params_ii_full,
     compute_ii_asymptotic_variance,
+    compute_simulation_variance,
+    select_best_grid_start,
 )
 from global_max import tiktak
 
@@ -125,6 +127,35 @@ def main():
     print("\nTarget moments:")
     for k in MOMENT_NAMES:
         print(f"  {k:22s} = {target_moments[k]:.6f}")
+
+    # ------------------------------------------------------------------
+    # 2. Weighting matrix: combine data variance and simulation variance
+    # ------------------------------------------------------------------
+    # Step 2a: locate the best-fit grid point using the data-only W
+    print("\nStep 2: computing combined weighting matrix ...")
+    best_grid = select_best_grid_start(df_grid, target_moments, W)
+    print(f"  Best grid point  (obj = {best_grid['obj_value']:.6f})")
+
+    # Step 2b: solve VFI at the best grid point and compute simulation vcov
+    params_grid = Parameters(
+        c=PARAMS_BASE.c,     fc=PARAMS_BASE.fc,
+        beta=PARAMS_BASE.beta, mu_nu=PARAMS_BASE.mu_nu,
+        ns=PARAMS_BASE.ns,   size=PARAMS_BASE.size,
+        gamma=best_grid["gamma"],         mu_eta=best_grid["mu_eta"],
+        sigma_eta2=best_grid["sigma_eta2"], rho_omega=best_grid["rho_omega"],
+        sigma_nu2=best_grid["sigma_nu2"],  epsilon=best_grid["epsilon"],
+        delta=best_grid["delta"],
+    )
+    sol_grid = solve_value_function(params_grid)
+    vcov_sim = compute_simulation_variance(
+        params_grid, sol_grid["p_policy"], sol_grid["n_policy"],
+        n_firms=500, n_years=20, n_reps=500, seed=212311,
+        moment_keys=MOMENT_NAMES, verbose=False,
+    )
+
+    # Step 2c: new W = inv(vcov_data + vcov_sim)
+    W = np.linalg.inv(vcov + vcov_sim)
+    print("  Combined weighting matrix computed.")
 
     # ------------------------------------------------------------------
     # 3. Estimate

@@ -143,6 +143,8 @@ print(f"converged: python={py_conv}, julia={jl['converged']}")
 # %% Stage 2 imports
 from estimation_functions import (
     compute_ii_jacobian,
+    compute_ii_asymptotic_variance,
+    compute_simulation_variance,
     simulate_firm,
     simulate_all_moments,
     select_best_grid_start,
@@ -169,17 +171,6 @@ df_vcov = pd.read_csv(target_vcov_path, index_col=0)
 vcov    = df_vcov.loc[MOMENT_NAMES, MOMENT_NAMES].to_numpy(dtype=np.float64)
 W       = np.linalg.inv(vcov)
 
-# Check whether W is positive definite; if not, project to nearest PD matrix
-# by clipping negative eigenvalues to a small positive floor before reconstructing.
-eigvals, eigvecs = np.linalg.eigh(W)
-min_eig = eigvals.min()
-if min_eig <= 0:
-    print(f"Warning: W is not positive definite (min eigenvalue = {min_eig:.4e}). "
-          "Projecting to nearest PD matrix.")
-    floor = 1e-8 * eigvals.max()
-    eigvals_clipped = np.maximum(eigvals, floor)
-    W = eigvecs @ np.diag(eigvals_clipped) @ eigvecs.T
-    W = (W + W.T) / 2   # enforce exact symmetry
 
 print("Target moments:")
 for k in MOMENT_NAMES:
@@ -198,6 +189,32 @@ true_vals = {
     "epsilon":    float(df_true["ϵ"].iloc[0]),
     "delta":      float(df_true["δ"].iloc[0]),
 }
+
+# %% Simulation covariance and asymptotic variance at true parameters
+params_true = Parameters(
+    c=params.c, fc=params.fc, beta=params.beta, ns=params.ns, size=params.size,
+    mu_nu=params.mu_nu,
+    gamma=true_vals["gamma"],         mu_eta=true_vals["mu_eta"],
+    sigma_eta2=true_vals["sigma_eta2"], rho_omega=true_vals["rho_omega"],
+    sigma_nu2=true_vals["sigma_nu2"],  epsilon=true_vals["epsilon"],
+    delta=true_vals["delta"],
+)
+sol_true = solve_value_function(params_true)
+
+vcov_sim_true, draws_sim_true = compute_simulation_variance(
+    params_true, sol_true["p_policy"], sol_true["n_policy"],
+    n_firms=500, n_years=20, n_reps=50, seed=212311,
+    moment_keys=MOMENT_NAMES,
+)
+
+
+W_sim= np.linalg.inv(vcov_sim_true + vcov)
+
+avar_true = compute_ii_asymptotic_variance(
+    params_true, W_sim_true, n_firms=5000, n_years=20, seed=0,
+)
+print("\nSimulation vcov and avar computed at true parameters.")
+
 
 df_grid = pd.read_csv(grid_path)
 start   = select_best_grid_start(df_grid, target_moments, W)
@@ -254,10 +271,6 @@ for k in MOMENT_NAMES:
     sim = moments_true[k]
     tgt = target_moments[k]
     print(f"  {k:20s}  {sim:10.6f}  {tgt:10.6f}  {sim - tgt:+10.6f}")
-
-### Test Jacobian###
-
-G = compute_ii_jacobian(params_true, n_firms=500, n_years=20, seed=212311)
 
 
 # %% Run simulate_all_moments at start guess (smoke test before estimation)
@@ -358,3 +371,5 @@ df_results = pd.DataFrame({
 results_path = SIM_DATA_DIR / "estimates_id_004.csv"
 df_results.to_csv(results_path, index=False)
 print(f"\nSaved to {results_path}")
+
+
