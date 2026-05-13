@@ -6,7 +6,7 @@ Ns = 200
 # df_params = CSV.read("../SimulatedData/true_parameters_id_002.csv", DataFrame)
 # r = df_params[1, :]
 # params = Parameters(c=1.0, fc=0.0, μη=Float64(r.μη),ση2=Float64(r.ση2),ρ_ω=Float64(r.ρ_ω), γ=Float64(r.γ),δ=Float64(r.δ), β=0.95, ϵ=Float64(r.ϵ), μν=1, σν2=Float64(r.σν2),Ns=Ns,scale=1.0,size=100.0)
-params = Parameters(c=1.0, fc=0.0, μη=log(0.01),ση2=0.05,ρ_ω=0.1, γ=0.9,δ=0.01, β=0.95, ϵ=8.0, μν=1, σν2=0.15,Ns=Ns,scale=1.0,size=100.0)
+params = Parameters(c=1.0, fc=0.0, μη=log(0.04),ση2=0.05,ρ_ω=0.1, γ=0.9,δ=0.01, β=0.95, ϵ=8.0, μν=1, σν2=0.15,Ns=Ns,scale=1.0,size=200.0)
 
 
 # ---------------------------------------------------
@@ -97,6 +97,8 @@ println("Average Sales: $(round(mean(demand_levels_sim), digits=4))")
 println("Average Inv-to-Sales Ratio (BOM Inv / Revenue): $(round(monthly_moments.avg_isr, digits=4))")
 println("Variance of log(1 + Inv-to-Sales Ratio): $(round(monthly_moments.var_log1p_isr, digits=4))")
 println("Average Gross Margin (Revenue / COGS): $(round(monthly_moments.avg_gross_margin, digits=4))")
+avg_opex_rev = mean(expense_sim[revenue_sim .> 0] ./ revenue_sim[revenue_sim .> 0])
+println("Average Opex / Revenue: $(round(avg_opex_rev, digits=4))")
 
 
 # ---------------------------------------------------

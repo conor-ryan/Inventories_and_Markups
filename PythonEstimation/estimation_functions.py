@@ -909,8 +909,19 @@ def compute_ii_asymptotic_variance(params_hat, W, n_firms=5000, n_years=20,
     G    = compute_ii_jacobian(params_hat, n_firms=n_firms, n_years=n_years,
                                seed=seed, maxiter=maxiter)
     avar = np.linalg.inv(G @ W @ G.T)
+
+    eigs = np.linalg.eigvalsh(avar)
+    if eigs.min() <= 0:
+        import warnings
+        warnings.warn(
+            f"avar is not positive definite (min eigenvalue = {eigs.min():.4e}). "
+            "Standard errors may be unreliable. This is likely caused by a "
+            "near-singular Jacobian G due to simulation noise or collinear moments.",
+            RuntimeWarning, stacklevel=2,
+        )
+
     vcov = avar / sample_size
-    se   = np.sqrt(np.diag(vcov))
+    se   = np.sqrt(abs(np.diag(vcov)))
 
     if verbose:
         print("\nAsymptotic standard errors:")

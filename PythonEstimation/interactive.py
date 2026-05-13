@@ -142,6 +142,7 @@ print(f"converged: python={py_conv}, julia={jl['converged']}")
 
 # %% Stage 2 imports
 from estimation_functions import (
+    compute_ii_jacobian,
     simulate_firm,
     simulate_all_moments,
     select_best_grid_start,
@@ -167,6 +168,18 @@ target_moments = dict(zip(df_target["moment"], df_target["value"].astype(float))
 df_vcov = pd.read_csv(target_vcov_path, index_col=0)
 vcov    = df_vcov.loc[MOMENT_NAMES, MOMENT_NAMES].to_numpy(dtype=np.float64)
 W       = np.linalg.inv(vcov)
+
+# Check whether W is positive definite; if not, project to nearest PD matrix
+# by clipping negative eigenvalues to a small positive floor before reconstructing.
+eigvals, eigvecs = np.linalg.eigh(W)
+min_eig = eigvals.min()
+if min_eig <= 0:
+    print(f"Warning: W is not positive definite (min eigenvalue = {min_eig:.4e}). "
+          "Projecting to nearest PD matrix.")
+    floor = 1e-8 * eigvals.max()
+    eigvals_clipped = np.maximum(eigvals, floor)
+    W = eigvecs @ np.diag(eigvals_clipped) @ eigvecs.T
+    W = (W + W.T) / 2   # enforce exact symmetry
 
 print("Target moments:")
 for k in MOMENT_NAMES:
@@ -242,6 +255,10 @@ for k in MOMENT_NAMES:
     tgt = target_moments[k]
     print(f"  {k:20s}  {sim:10.6f}  {tgt:10.6f}  {sim - tgt:+10.6f}")
 
+### Test Jacobian###
+
+G = compute_ii_jacobian(params_true, n_firms=500, n_years=20, seed=212311)
+
 
 # %% Run simulate_all_moments at start guess (smoke test before estimation)
 # init_guess = [gamma, mu_eta, sigma_eta2, rho_omega, sigma_nu2, epsilon, delta]
@@ -289,7 +306,7 @@ for k in ["gamma","mu_eta","sigma_eta2","rho_omega","sigma_nu2","epsilon","delta
 print(f"  obj_value    = {ii_result['obj_value']:.8f}")
 print("\nTik-Tak history (iter, obj, alpha):")
 for rec in ii_result["tiktak_history"]:
-    print(f"  iter {rec[0]:2d}  obj={rec[1]:.8f}  alpha={rec[2]:.3f}")
+    print(f"  iter {rec[0]}  obj={rec[1]:.8f}  alpha={rec[2]:.3f}")
 
 
 # %% Standard errors — asymptotic variance

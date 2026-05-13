@@ -141,7 +141,7 @@ def main():
         n_years=20,
         seed=212311,
         max_iter=1000,
-        n_iterations=10,
+        n_iterations=20,
         alpha_min=0.1,
         verbose=False,
         method="nelder-mead",

@@ -17,7 +17,7 @@
 #       sbatch --array=1-${N}%4 run_monte_carlo.slurm
 # =============================================================================
 #SBATCH --job-name=mc-estimation
-#SBATCH --array=1-4
+#SBATCH --array=1-50
 #SBATCH --output=logs/mc-%A_%a.out
 #SBATCH --error=logs/mc-%A_%a.err
 #SBATCH --time=04:00:00
@@ -25,8 +25,8 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=8G
-#SBATCH --account=econ_crch_research
-#SBATCH --partition=basic
+##SBATCH --account=econ_crch_research
+##SBATCH --partition=basic
 set -euo pipefail
 
 # Run from the Code directory (mirrors run_simulate_moments.slurm convention).
