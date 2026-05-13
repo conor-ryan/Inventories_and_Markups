@@ -987,4 +987,4 @@ def compute_simulation_variance(params, p_policy, n_policy,
                                                           for j in range(n_moments))
             print(row_str)
 
-    return vcov, draws
+    return vcov

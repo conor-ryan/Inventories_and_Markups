@@ -201,7 +201,7 @@ params_true = Parameters(
 )
 sol_true = solve_value_function(params_true)
 
-vcov_sim_true, draws_sim_true = compute_simulation_variance(
+vcov_sim_true = compute_simulation_variance(
     params_true, sol_true["p_policy"], sol_true["n_policy"],
     n_firms=500, n_years=20, n_reps=50, seed=212311,
     moment_keys=MOMENT_NAMES,
