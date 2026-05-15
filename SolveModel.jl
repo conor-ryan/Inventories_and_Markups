@@ -2,45 +2,68 @@ using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Plots, Interpola
 include("ModelFunctions.jl")
 include("EstimationFunctions.jl")
 
-Ns = 200
+Ns = 400
 # df_params = CSV.read("../SimulatedData/true_parameters_id_002.csv", DataFrame)
 # r = df_params[1, :]
 # params = Parameters(c=1.0, fc=0.0, μη=Float64(r.μη),ση2=Float64(r.ση2),ρ_ω=Float64(r.ρ_ω), γ=Float64(r.γ),δ=Float64(r.δ), β=0.95, ϵ=Float64(r.ϵ), μν=1, σν2=Float64(r.σν2),Ns=Ns,scale=1.0,size=100.0)
-params = Parameters(c=1.0, fc=0.0, μη=log(0.04),ση2=0.05,ρ_ω=0.1, γ=0.9,δ=0.01, β=0.95, ϵ=8.0, μν=1, σν2=0.15,Ns=Ns,scale=1.0,size=200.0)
+params = Parameters(c=1.0, fc=0.0, μη=log(0.01),ση2=0.05,ρ_ω=0.1, γ=0.9,δ=0.05, β=0.995, ϵ=16.0, μν=1, σν2=0.05,Ns=Ns,scale=1.0,size=200.0)
 
 
 # ---------------------------------------------------
 # Single-iteration benchmark (run interactively before the full solve)
 # ---------------------------------------------------
-# println("Benchmarking one value-function iteration...")
-# display(@benchmark solve_value_function($params, maxiter=1000,fast_interp=true) samples=10 evals=1)
+println("Benchmarking one value-function iteration...")
+display(@benchmark solve_value_function($params, maxiter=5000,fast_interp=true,tol=1e-2,conv=:policy) samples=10 evals=1)
 
-# # ---------------------------------------------------
-# # Profile one iteration and display a flat time profile
-# # ---------------------------------------------------
-# println("\nProfiling one value-function iteration...")
-# Profile.clear()
-# @profile solve_value_function(params, maxiter=1000)
-# Profile.print(sortedby=:count, mincount=25)
-# # ---------------------------------------------------
+# ---------------------------------------------------
+# Convergence criterion comparison: policy vs value function
+# ---------------------------------------------------
+# println("\nComparing convergence criteria...")
+# _, n_pol_policy, p_pol_policy, _, conv_policy = solve_value_function(params, conv=:policy, maxiter=5000, fast_interp=true,tol=1e-2)
+# _, n_pol_value,  p_pol_value,  _, conv_value  = solve_value_function(params, conv=:value, maxiter=10000, fast_interp=true,tol=1e-5)
 
+# println("  conv=:policy  converged=$(conv_policy)")
+# println("  conv=:value   converged=$(conv_value)")
+# println("  Max |Δn_policy| (order):  $(maximum(abs.(n_pol_policy .- n_pol_value)))")
+# println("  Max |Δp_policy| (price):  $(maximum(abs.(p_pol_policy .- p_pol_value)))")
 
+# # Compare moments from the two policy functions
+# let
+#     ppi_pol, opi_pol = build_fast_policy_interpolants(params.Sgrid, p_pol_policy, n_pol_policy)
+#     ppi_val, opi_val = build_fast_policy_interpolants(params.Sgrid, p_pol_value,  n_pol_value)
+#     ppi_pol = OmegaPolicyInterp(ppi_pol, params.ω_grid)
+#     opi_pol = OmegaPolicyInterp(opi_pol, params.ω_grid)
+#     ppi_val = OmegaPolicyInterp(ppi_val, params.ω_grid)
+#     opi_val = OmegaPolicyInterp(opi_val, params.ω_grid)
 
-# # Solve model using ModelFunctions
-# println("Solving price policy...")
-# p_policy_current = zeros(params.Ns, params.Q_ω)
+#     m_pol = _simulate_all_moments(params, ppi_pol, opi_pol, 500, 20, 212311)
+#     m_val = _simulate_all_moments(params, ppi_val, opi_val, 500, 20, 212311)
 
-# # Initial price guess via static FOC for each ω state
-# for j in 1:params.Q_ω
-#     p_policy_current[:, j] .= solve_price_policy(params, params.c, params.ω_grid[j])
+#     moment_keys = [:avg_isr, :var_log1p_isr, :avg_gross_margin, :γ_OLS, :ρ_ω, :σ_η2, :avg_opex_sales]
+#     println("\n  Moment comparison (policy conv vs value conv):")
+#     println("  $(rpad("moment", 22))  $(lpad("conv=:policy", 14))  $(lpad("conv=:value", 14))  $(lpad("diff", 12))")
+#     for k in moment_keys
+#         vp = getfield(m_pol, k); vv = getfield(m_val, k)
+#         @printf("  %-22s  %14.6f  %14.6f  %12.6f\n", k, vp, vv, vp - vv)
+#     end
 # end
+
+
+# Solve model using ModelFunctions
+println("Solving price policy...")
+p_policy_current = zeros(params.Ns, params.Q_ω)
+
+# Initial price guess via static FOC for each ω state
+for j in 1:params.Q_ω
+    p_policy_current[:, j], conv = solve_price_policy(params, params.c, params.ω_grid[j])
+end
 
 # ind = 3:length(params.Sgrid)
 # plot(params.Sgrid[ind],p_policy[ind])
-
+D_table, C_table = precompute_demand(p_policy_current, params)
 
 println("Solving value function...")
-p_policy, order_policy, V, V_by_omega, price_policy_interp, order_policy_interp, Vinterp, converged = solve_model(params);
+p_policy, order_policy, V, V_by_omega, price_policy_interp, order_policy_interp, Vinterp, converged = solve_model(params,conv=:policy,tol=1e-3,verbose=true,fast_interp=true,maxiter=5000);
 
 # p_policy_full, order_policy_full, V_full, V_by_omega_full, price_policy_interp, order_policy_interp, Vinterp = solve_model(params,full=true);
 

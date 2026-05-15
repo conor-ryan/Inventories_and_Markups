@@ -720,7 +720,7 @@ function compute_moments_on_grid(param_vectors::AbstractVector{<:AbstractVector{
                                   n_firms::Int              = 5000,
                                   n_years::Int              = 20,
                                   seed::Int                 = 212311,
-                                  max_value_iterations::Int = 500,
+                                  max_value_iterations::Int = 5000,
                                   output_path::String       = "grid_moments.csv")
 
     # --- Validate and convert user-supplied parameter vectors ---------------
@@ -786,8 +786,10 @@ function compute_moments_on_grid(param_vectors::AbstractVector{<:AbstractVector{
                 ϵ    = ϵ_i,
                 σν2  = σν2_i)
 
-            _, _, _, _, ppi, opi, _, converged_i = solve_model(params_i,maxiter=max_value_iterations)
+            _, n_pol_i, _, _, ppi, opi, _, converged_i = solve_model(params_i,maxiter=max_value_iterations,tol=1e-2,conv=:policy)
             !converged_i && error("value function did not converge")
+            any(j -> all(n_pol_i[:, j] .== 0.0), 1:params_i.Q_ω) && error("order policy is zero for at least one ω state")
+
             row_seed = seed + idx - 1
             m̃ = _simulate_all_moments(params_i, ppi, opi, n_firms, n_years, row_seed)
 

@@ -31,7 +31,7 @@ struct Parameters
     Sgrid::Vector{Float64}
     size::Float64
 
-    function Parameters(; c=1.0, μη=0.0, ση2=0.0, ρ_ω=0.9, γ=1.0, δ=0.2, ϵ=2.0, σν2=0.15, μν=1.0, β=0.95, fc=0.0,  Q=19, Q_ω=7, scale=1.0, size=100,  Ns=200)
+    function Parameters(; c=1.0, μη=0.0, ση2=0.0, ρ_ω=0.9, γ=1.0, δ=0.2, ϵ=2.0, σν2=0.15, μν=1.0, β=0.995, fc=0.0,  Q=19, Q_ω=7, scale=1.0, size=100,  Ns=200)
                 
         x, w = gausshermite(Q)
         gl_x, gl_w = gausslegendre(Q)
@@ -102,7 +102,7 @@ struct Parameters
 
         # Create inventory state grid
         Smax=quantile(demand_dist,0.85)*(ϵ - 1)/ϵ 
-        Sgrid_vec = collect(range(1e-4, Smax, length=Ns))
+        Sgrid_vec = collect(range(0.5*minimum(x_lognormal), Smax, length=Ns))
 
         new(c, fc, μη, ση2, ρ_ω, length(ω_grid_vec), ω_grid_vec, P_ω_mat, π_ω_vec,
             γ, δ, β, ϵ, μν, σν2,demand_dist , Q, x, w, x_lognormal, gl_x, gl_w, Smax, Ns, Sgrid_vec,size)
@@ -115,7 +115,7 @@ end
 Solve the complete model: price policy, value function, and order policy.
 Returns (p_policy, order_policy, V, price_policy_interp, order_policy_interp, Vinterp)
 """
-function solve_model(params; full=false, verbose=false,fast_interp=true,maxiter=1000)
+function solve_model(params; full=false, verbose=false, fast_interp=true, maxiter=1000, tol=1e-4, conv=:policy)
     Sgrid  = params.Sgrid
     ω_grid = params.ω_grid
     Nω     = params.Q_ω
@@ -123,7 +123,7 @@ function solve_model(params; full=false, verbose=false,fast_interp=true,maxiter=
     if verbose
         println("Solving value function...")
     end
-    V, order_policy, p_policy, V_by_omega, converged = solve_value_function(params, full=full,fast_interp=fast_interp,maxiter=maxiter)
+    V, order_policy, p_policy, V_by_omega, converged = solve_value_function(params, full=full, fast_interp=fast_interp, maxiter=maxiter, tol=tol, conv=conv)
 
     price_policy_interp_nodes, order_policy_interp_nodes =
         build_fast_policy_interpolants(Sgrid, p_policy, order_policy)
@@ -250,15 +250,20 @@ function solve_price_policy(params::Parameters, c_tilde::Float64, ω::Float64)
     Sgrid = params.Sgrid
     Ns = params.Ns
     p_policy = zeros(Ns)
-    
+    price_converged = true
+
     for (i, s) in enumerate(Sgrid)
 
         obj(p) = price_residual(p, s, c_tilde, ω, params)^2
         result = Optim.optimize(obj, 1e-3, 50.0, Brent(), rel_tol=1e-16, abs_tol=1e-12)
         p_policy[i] = result.minimizer
+        if !Optim.converged(result) || sqrt(result.minimum) > 1e-6
+            # @warn "solve_price_policy did not converge" s ω residual=sqrt(result.minimum)
+            price_converged = false
+        end
     end
-    
-    return p_policy
+
+    return p_policy, price_converged
 end
 
 
@@ -349,7 +354,7 @@ end
 Solve the value function using value function iteration.
 Returns the value function and optimal order policy.
 """
-function solve_value_function(params; tol=1e-4, maxiter=1000, full=false, fast_interp=true,verbose=false)
+function solve_value_function(params; tol=1e-4, maxiter=1000, full=false, fast_interp=true, verbose=false, conv=:policy)
     Sgrid = params.Sgrid
     Ns = params.Ns
     ω_grid = params.ω_grid
@@ -369,8 +374,14 @@ function solve_value_function(params; tol=1e-4, maxiter=1000, full=false, fast_i
     iter = 0
 
     # Initial price guess via static FOC for each ω state
+    price_init_converged = true
     for j in 1:Nω
-        p_policy_current[:, j] .= solve_price_policy(params, c_tilde, ω_grid[j])
+        p_policy_current[:, j], p_conv_j = solve_price_policy(params, c_tilde, ω_grid[j])
+        price_init_converged = price_init_converged && p_conv_j
+    end
+    if !price_init_converged
+        V = V_by_omega * params.π_ω
+        return V, n_policy_current, p_policy_current, V_by_omega, false
     end
 
     # Precompute demand and operating-cost tables to avoid pow_body in the quadrature loop
@@ -380,6 +391,7 @@ function solve_value_function(params; tol=1e-4, maxiter=1000, full=false, fast_i
     inv_h       = (Ns - 1) / (Sgrid[end] - Sgrid[1])
     EV_cont_all = Matrix{Float64}(undef, Ns, Nω)   # preallocated for single GEMM per iteration
     n_policy_warm = zeros(Ns, Nω)                  # preallocated for cross-iteration warm-start
+    n_policy_prev = copy(n_policy_current)          # used when conv=:policy
 
     while diff > tol && iter < maxiter
 
@@ -404,7 +416,12 @@ function solve_value_function(params; tol=1e-4, maxiter=1000, full=false, fast_i
             end
         end
 
-        diff = maximum(abs.(V_by_omega_new .- V_by_omega))
+        if (conv == :policy) && (iter > 10)
+            diff = maximum(abs.(n_policy_current .- n_policy_prev))
+            n_policy_prev .= n_policy_current
+        else
+            diff = maximum(abs.(V_by_omega_new .- V_by_omega))
+        end
         V_by_omega .= V_by_omega_new
         iter += 1
     end
