@@ -88,10 +88,19 @@ def load_all_estimates(sim_data_dir: Path) -> tuple[pd.DataFrame, float, int]:
         dataset_id = fpath.stem.split("_")[-1]
         df = pd.read_csv(fpath)
 
-        required = {"parameter", "true_value", "estimate", "std_error"}
+        required = {"parameter", "estimate", "std_error"}
         missing = required - set(df.columns)
         if missing:
             raise ValueError(f"{fpath.name} missing required columns: {sorted(missing)}")
+
+        # Load true parameters and merge in as true_value column
+        true_path = sim_data_dir / f"true_parameters_id_{dataset_id}.csv"
+        df_true = pd.read_csv(true_path)
+        if {"parameter", "value"}.issubset(df_true.columns):
+            true_map = dict(zip(df_true["parameter"], df_true["value"].astype(float)))
+        else:
+            true_map = {k: float(df_true[k].iloc[0]) for k in PARAM_NAMES}
+        df["true_value"] = df["parameter"].map(true_map)
 
         # Grab convergence diagnostic if present.
         conv = df.loc[df["parameter"] == "converged", "estimate"]

@@ -54,7 +54,7 @@ SUMMARY_LOCK="${SIM_DATA_DIR}/.monte_carlo_summary.lock"
 python estimation_main.py \
     --id "${DATASET_ID}" \
     --n-threads "${SLURM_CPUS_PER_TASK:-1}" \
-    --sim-data-dir "${SIM_DATA_DIR}"
+    --data-dir "${SIM_DATA_DIR}"
 
 # After each task finishes, one task will create the aggregate summary once
 # all expected estimates_id_*.csv files are present.

@@ -32,20 +32,20 @@ for v in param_vectors
     # v[7] = exp(v[7])
 end
 
-# # Slice param_vectors by SLURM array task ID (falls back to full set if not in a job array)
-# task_id    = parse(Int, get(ENV, "SLURM_ARRAY_TASK_ID",    "1"))
-# n_tasks    = parse(Int, get(ENV, "SLURM_ARRAY_TASK_COUNT", "1"))
-# chunk_size = ceil(Int, length(param_vectors) / n_tasks)
-# i_start    = (task_id - 1) * chunk_size + 1
-# i_end      = min(task_id * chunk_size, length(param_vectors))
-# param_vectors = param_vectors[i_start:i_end]
+# Slice param_vectors by SLURM array task ID (falls back to full set if not in a job array)
+task_id    = parse(Int, get(ENV, "SLURM_ARRAY_TASK_ID",    "1"))
+n_tasks    = parse(Int, get(ENV, "SLURM_ARRAY_TASK_COUNT", "1"))
+chunk_size = ceil(Int, length(param_vectors) / n_tasks)
+i_start    = (task_id - 1) * chunk_size + 1
+i_end      = min(task_id * chunk_size, length(param_vectors))
+param_vectors = param_vectors[i_start:i_end]
 
-# output_path = n_tasks > 1 ?
-#     "SimulatedData/moments_$(lpad(task_id, 3, '0')).csv" :
-#     "SimulatedData/moments.csv"
+output_path = n_tasks > 1 ?
+    "SimulatedData/moments_$(lpad(task_id, 3, '0')).csv" :
+    "SimulatedData/moments.csv"
 
-# println("Task $(task_id)/$(n_tasks): grid points $(i_start)–$(i_end) ($(length(param_vectors)) total)")
-output_path = "../SimulatedData/moments.csv"
+println("Task $(task_id)/$(n_tasks): grid points $(i_start)–$(i_end) ($(length(param_vectors)) total)")
+# output_path = "../SimulatedData/moments.csv"
 
 df_out = compute_moments_on_grid(
     param_vectors;
@@ -60,13 +60,13 @@ n_ok = sum(.!df_out.failed)
 println("Sweep complete. $(n_ok) / $(nrow(df_out)) points succeeded.")
 println("Saved: $(output_path)")
 
-# Drop grid points with implausible inventory-to-sales ratios
-isr_threshold = 20.0
-n_before = nrow(df_out)
-df_out = df_out[coalesce.(df_out.avg_isr, Inf) .<= isr_threshold, :]
-n_dropped = n_before - nrow(df_out)
-n_dropped > 0 && @printf("Dropped %d / %d grid points with avg_isr > %.1f\n",
-                          n_dropped, n_before, isr_threshold)
+# # Drop grid points with implausible inventory-to-sales ratios
+# isr_threshold = 20.0
+# n_before = nrow(df_out)
+# df_out = df_out[coalesce.(df_out.avg_isr, Inf) .<= isr_threshold, :]
+# n_dropped = n_before - nrow(df_out)
+# n_dropped > 0 && @printf("Dropped %d / %d grid points with avg_isr > %.1f\n",
+#                           n_dropped, n_before, isr_threshold)
 
 # Summary output
 fail_fraction = sum(df_out.failed) / nrow(df_out)
