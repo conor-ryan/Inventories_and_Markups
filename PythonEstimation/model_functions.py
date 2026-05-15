@@ -61,12 +61,12 @@ class Parameters:
         epsilon=2.0,
         sigma_nu2=0.15,
         mu_nu=1.0,
-        beta=0.95,
+        beta=0.995,
         q=19,
         q_omega=7,
         scale=1.0,
         size=100.0,
-        ns=200,
+        ns=400,
     ):
         x, w = hermgauss(q)
         gl_x, gl_w = leggauss(q)
@@ -122,7 +122,7 @@ class Parameters:
         sigma_nu2_back = sigma_nu2_adj / ((scale_parameter ** 2) * (size ** 2))
 
         smax = math.exp(mu + sigma * NORMAL.inv_cdf(0.85)) * (epsilon - 1.0) / epsilon
-        sgrid = np.linspace(1e-4, smax, ns)
+        sgrid = np.linspace(0.5 * x_lognormal.min(), smax, ns)
 
         self.c = float(c_adj)
         self.fc = float(fc)
@@ -283,11 +283,14 @@ def _optimize_n(s, d_col, c_col, p, vinterp_vals, s_lo, inv_h, fc, c_param, delt
 
 def solve_price_policy(params, c_tilde, omega):
     p_policy = np.empty(params.ns, dtype=np.float64)
+    price_converged = True
     for i, s in enumerate(params.sgrid):
         objective = lambda p: price_residual(p, s, c_tilde, omega, params) ** 2
         result = minimize_scalar(objective, bounds=(1e-3, 50.0), method='bounded')
         p_policy[i] = result.x
-    return p_policy
+        if not result.success or math.sqrt(result.fun) > 1e-6:
+            price_converged = False
+    return p_policy, price_converged
 
 
 def precompute_demand(p_policy, params):
@@ -351,7 +354,7 @@ def _maximize_expected_value_choice_precomp(s_i, j, d_table, c_table, p_policy, 
     )
 
 
-def solve_value_function(params, tol=1e-4, maxiter=1000):
+def solve_value_function(params, tol=1e-4, maxiter=1000,conv="policy"):
     sgrid   = params.sgrid
     ns      = params.ns
     n_omega = params.q_omega
@@ -359,9 +362,24 @@ def solve_value_function(params, tol=1e-4, maxiter=1000):
 
     v_by_omega       = np.zeros((ns, n_omega), dtype=np.float64)
     p_policy_current = np.zeros((ns, n_omega), dtype=np.float64)
-
+    n_policy_prev = np.zeros((ns, n_omega), dtype=np.float64)
+    all_price_converged = True
     for j in range(n_omega):
-        p_policy_current[:, j] = solve_price_policy(params, params.c, params.omega_grid[j])
+        p_col, p_conv = solve_price_policy(params, params.c, params.omega_grid[j])
+        p_policy_current[:, j] = p_col
+        if not p_conv:
+            all_price_converged = False
+
+    if not all_price_converged:
+        return {
+            "v":          v_by_omega @ params.pi_omega,
+            "n_policy":   np.zeros((ns, n_omega), dtype=np.float64),
+            "p_policy":   p_policy_current,
+            "v_by_omega": v_by_omega,
+            "converged":  False,
+            "iterations": 0,
+            "final_diff": float("inf"),
+        }
 
     d_table, c_table = precompute_demand(p_policy_current, params)
 
@@ -383,7 +401,11 @@ def solve_value_function(params, tol=1e-4, maxiter=1000):
             params.quad_weights,
         )
 
-        diff       = float(np.max(np.abs(v_by_omega_new - v_by_omega)))
+        if conv == "policy" and it > 10:
+            diff = float(np.max(np.abs(n_policy_current - n_policy_prev)))
+            n_policy_prev = n_policy_current.copy()
+        else:
+            diff = float(np.max(np.abs(v_by_omega_new - v_by_omega)))
         v_by_omega = v_by_omega_new
         it        += 1
 
