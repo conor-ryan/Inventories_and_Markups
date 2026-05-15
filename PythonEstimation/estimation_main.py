@@ -1,16 +1,17 @@
 """estimation_main.py
 
-Stage 3 Monte Carlo: estimate the model for a single simulated dataset.
+Estimate the model for a single dataset (real or simulated). Designed to
+run in parallel across many datasets identified by --id.
 
 Usage
 -----
-    python estimation_main.py --id 003 --n-threads 8 --sim-data-dir ../../SimulatedData
+    python estimation_main.py --id 003 --n-threads 8 --data-dir ../../Data
 
 Arguments
 ---------
 --id           : zero-padded 3-digit dataset identifier, e.g. 001
 --n-threads    : number of Numba/OpenMP threads for the VFI inner loop
---sim-data-dir : path to the SimulatedData directory (relative or absolute)
+--data-dir     : path to the data directory containing inputs and outputs
 """
 
 import argparse
@@ -32,7 +33,7 @@ def _parse_args():
                    help="Dataset ID, e.g. 003")
     p.add_argument("--n-threads",     type=int, default=1,
                    help="Numba thread count for VFI parallelism")
-    p.add_argument("--sim-data-dir",  default="../../SimulatedData",
+    p.add_argument("--data-dir",  default="../../SimulatedData",
                    help="Path to SimulatedData directory")
     return p.parse_args()
 
@@ -81,9 +82,6 @@ MOMENT_NAMES = ["avg_isr", "var_log1p_isr", "avg_gross_margin",
 PARAM_NAMES  = ["gamma", "mu_eta", "sigma_eta2", "rho_omega",
                 "sigma_nu2", "epsilon", "delta"]
 
-# Number of firms used to compute target moments in the simulated datasets
-# (must match the Julia simulation that generated the data)
-SAMPLE_SIZE = 500
 
 
 # ---------------------------------------------------------------------------
@@ -92,37 +90,26 @@ SAMPLE_SIZE = 500
 
 def main():
     dataset_id  = args.id.zfill(3)
-    sim_data    = Path(args.sim_data_dir).resolve()
-    output_path = sim_data / f"estimates_id_{dataset_id}.csv"
+    data_dir    = Path(args.data_dir).resolve()
+    output_path = data_dir / f"estimates_id_{dataset_id}.csv"
 
-    print(f"=== Monte Carlo estimation: dataset {dataset_id} ===")
-    print(f"  sim_data   : {sim_data}")
+    print(f"=== Estimation: dataset {dataset_id} ===")
+    print(f"  data_dir   : {data_dir}")
     print(f"  n_threads  : {args.n_threads}")
     print(f"  output     : {output_path}")
 
     # ------------------------------------------------------------------
     # 1. Load inputs
     # ------------------------------------------------------------------
-    df_target = pd.read_csv(sim_data / f"target_moments_id_{dataset_id}.csv")
+    df_target = pd.read_csv(data_dir / f"target_moments_id_{dataset_id}.csv")
     target_moments = dict(zip(df_target["moment"], df_target["value"].astype(float)))
 
-    df_vcov = pd.read_csv(sim_data / f"target_moment_vcov_id_{dataset_id}.csv",
+    df_vcov = pd.read_csv(data_dir / f"target_moment_vcov_id_{dataset_id}.csv",
                           index_col=0)
     vcov = df_vcov.loc[MOMENT_NAMES, MOMENT_NAMES].to_numpy(dtype=np.float64)
     W    = np.linalg.inv(vcov)
 
-    df_true    = pd.read_csv(sim_data / f"true_parameters_id_{dataset_id}.csv")
-    true_vals  = {
-        "gamma":      float(df_true["γ"].iloc[0]),
-        "mu_eta":     float(df_true["μη"].iloc[0]),
-        "sigma_eta2": float(df_true["ση2"].iloc[0]),
-        "rho_omega":  float(df_true["ρ_ω"].iloc[0]),
-        "sigma_nu2":  float(df_true["σν2"].iloc[0]),
-        "epsilon":    float(df_true["ϵ"].iloc[0]),
-        "delta":      float(df_true["δ"].iloc[0]),
-    }
-
-    df_grid = pd.read_csv(sim_data / "moments.csv")
+    df_grid = pd.read_csv(data_dir / "moments.csv")
 
     print("\nTarget moments:")
     for k in MOMENT_NAMES:
@@ -205,7 +192,6 @@ def main():
         n_firms=5000,
         n_years=20,
         seed=212311,
-        sample_size=SAMPLE_SIZE,
         verbose=False,
     )
     print(f"  SE wall time         : {time.perf_counter() - t0:.1f}s")
@@ -217,12 +203,11 @@ def main():
     for name, se in zip(PARAM_NAMES, se_results["se"]):
         rows.append({
             "parameter":  name,
-            "true_value": true_vals[name],
             "estimate":   ii_result[name],
             "std_error":  se,
         })
     # Scalar diagnostics as extra rows
-    rows.append({"parameter": "obj_value",  "true_value": float("nan"),
+    rows.append({"parameter": "obj_value",
                  "estimate": ii_result["obj_value"], "std_error": float("nan")})
 
     df_out = pd.DataFrame(rows)
@@ -230,14 +215,10 @@ def main():
     print(f"\nSaved results to {output_path}")
 
     # Summary table
-    print(f"\n{'parameter':14s}  {'true':>12s}  {'estimate':>12s}  "
-          f"{'std_error':>12s}  {'bias/SE':>10s}")
-    print("-" * 68)
+    print(f"\n{'parameter':14s}  {'estimate':>12s}  {'std_error':>12s}")
+    print("-" * 42)
     for name, se in zip(PARAM_NAMES, se_results["se"]):
-        est     = ii_result[name]
-        true    = true_vals[name]
-        bias_se = (est - true) / se if se > 0 else float("nan")
-        print(f"  {name:12s}  {true:12.6f}  {est:12.6f}  {se:12.6f}  {bias_se:10.3f}")
+        print(f"  {name:12s}  {ii_result[name]:12.6f}  {se:12.6f}")
 
 
 if __name__ == "__main__":
