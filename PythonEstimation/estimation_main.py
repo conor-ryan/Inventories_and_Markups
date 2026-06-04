@@ -214,6 +214,29 @@ def main():
     df_out.to_csv(output_path, index=False)
     print(f"\nSaved results to {output_path}")
 
+    # ------------------------------------------------------------------
+    # 6. Implied moments at estimated parameters
+    # ------------------------------------------------------------------
+    sol_hat = solve_value_function(params_hat)
+    implied_moments = simulate_all_moments(
+        params_hat, sol_hat["p_policy"], sol_hat["n_policy"],
+        n_firms=500, n_years=20, seed=212311,
+    )
+    moments_path = data_dir / f"implied_moments_id_{dataset_id}.csv"
+    df_moments = pd.DataFrame([
+        {"moment": k, "implied": implied_moments[k], "target": target_moments[k]}
+        for k in MOMENT_NAMES
+    ])
+    df_moments.to_csv(moments_path, index=False)
+    print(f"Saved implied moments to {moments_path}")
+
+    print(f"\n{'moment':22s}  {'implied':>10s}  {'target':>10s}  {'diff':>10s}")
+    print("-" * 58)
+    for k in MOMENT_NAMES:
+        imp = implied_moments[k]
+        tgt = target_moments[k]
+        print(f"  {k:20s}  {imp:10.6f}  {tgt:10.6f}  {imp - tgt:+10.6f}")
+
     # Summary table
     print(f"\n{'parameter':14s}  {'estimate':>12s}  {'std_error':>12s}")
     print("-" * 42)
