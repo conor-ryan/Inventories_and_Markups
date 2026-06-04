@@ -1,7 +1,8 @@
 using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Plots, Interpolations, LineSearch, Random, Statistics, DataFrames, Printf
 include("ModelFunctions.jl")
-
-params = Parameters(c=1.0, fc=0.0, μη=log(0.1), ση2=0.05, ρ_ω=0.1, γ=0.9, δ=0.05, β=0.95, ϵ=8.0, μν=1, σν2=0.09, Ns=200, scale=1.0, size=100)
+Ns = 200
+# params = Parameters(c=1.0, fc=0.0, μη=log(0.016),ση2=0.05,ρ_ω=0.1, γ=0.9,δ=0.05, β=0.995, ϵ=16.0, μν=1, σν2=0.05,Ns=Ns,scale=1.0,size=200.0)
+params = Parameters(c=1.0, fc=0.0, μη=-1.14608,ση2=0.768512,ρ_ω=0.404428, γ=1.06935,δ=0.163095, β=0.995, ϵ=13.6956, μν=1.0, σν2=0.386298,Ns=Ns,scale=1.0,size=200.0)
 
 Sgrid = params.Sgrid
 
@@ -15,7 +16,7 @@ p_init, order_init, V_init, V_by_omega_init, _, _, _ = solve_model(params, full=
 # Solve with full algorithm (full=true)
 # ---------------------------------------------------
 println("Solving with full algorithm (full=true)...")
-p_full, order_full, V_full, V_by_omega_full, _, _, _ = solve_model(params, full=true)
+p_full, order_full, V_full, V_by_omega_full, _, _, _ = solve_model(params, full=true,verbose=true)
 
 # ---------------------------------------------------
 # Omega-integrated policies (using ergodic distribution)

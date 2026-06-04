@@ -121,8 +121,9 @@ class Parameters:
         mu_nu_back = mu_nu_adj / (scale_parameter * size)
         sigma_nu2_back = sigma_nu2_adj / ((scale_parameter ** 2) * (size ** 2))
 
-        smax = math.exp(mu + sigma * NORMAL.inv_cdf(0.85)) * (epsilon - 1.0) / epsilon
-        sgrid = np.linspace(0.5 * x_lognormal.min(), smax, ns)
+        lim_p = limit_price(mu, sigma, epsilon, gamma, c_adj, omega_grid[0])
+        smax = math.exp(mu + sigma * NORMAL.inv_cdf(0.95)) * lim_p ** (-epsilon)
+        sgrid = np.linspace(0.0, smax, ns)
 
         self.c = float(c_adj)
         self.fc = float(fc)
@@ -210,6 +211,42 @@ def price_residual(p, s, c_tilde, omega, params):
     return p - rhs
 
 
+def proxy_profit_unconst(p, c_tilde, omega, mu_log, sigma_log, epsilon, gamma):
+    e_nu = math.exp(mu_log + 0.5 * sigma_log ** 2)
+    e_nu_gamma = math.exp(gamma * mu_log + 0.5 * (gamma ** 2) * sigma_log ** 2)
+    return e_nu * p ** (-epsilon) * (p - c_tilde) - omega * e_nu_gamma * p ** (-gamma * epsilon)
+
+
+def proxy_profit(p, s, c_tilde, omega, params):
+    nu_bar = s * p ** params.epsilon
+    f_bar = lognormal_cdf(nu_bar, params.mu_log_nu, params.sigma_log_nu)
+    tail = 1.0 - f_bar
+    _, e_nu_gamma_trunc, e_nu_trunc = truncated_lognormal_ratio_e_nu_gamma_over_e_nu(nu_bar, params)
+    e_d = p ** (-params.epsilon) * f_bar * e_nu_trunc + s * tail
+    e_d_gamma = p ** (-params.gamma * params.epsilon) * f_bar * e_nu_gamma_trunc + (s ** params.gamma) * tail
+    return (p - c_tilde) * e_d - omega * e_d_gamma
+
+
+def neg_profit_check(mu_log, sigma_log, epsilon, gamma, c_tilde, omega):
+    e_nu = math.exp(mu_log + 0.5 * sigma_log ** 2)
+    e_nu_gamma = math.exp(gamma * mu_log + 0.5 * (gamma ** 2) * sigma_log ** 2)
+    A = e_nu
+    B = omega * e_nu_gamma
+    a = epsilon * (1.0 - gamma)
+    if c_tilde <= 0.0 or a < 1.0:
+        return False
+    if abs(a - 1.0) < 1e-10:
+        return A <= B
+    b_crit = A * ((a - 1.0) ** (a - 1.0)) / ((a ** a) * (c_tilde ** (a - 1.0)))
+    return B >= b_crit
+
+
+def limit_price(mu_log, sigma_log, epsilon, gamma, c_tilde, omega):
+    obj = lambda p: -proxy_profit_unconst(p, c_tilde, omega, mu_log, sigma_log, epsilon, gamma)
+    result = minimize_scalar(obj, bounds=(1e-3, 5.0), method='bounded')
+    return result.x
+
+
 @jit(nopython=True, fastmath=True, cache=True)
 def _ev_single(n, s, d_col, c_col, p, vinterp_vals, s_lo, inv_h, fc, c_param, delta, beta, quad_weights):
     """Compiled EV evaluation for a single order quantity n."""
@@ -285,10 +322,17 @@ def solve_price_policy(params, c_tilde, omega):
     p_policy = np.empty(params.ns, dtype=np.float64)
     price_converged = True
     for i, s in enumerate(params.sgrid):
+        if s == 0.0:
+            p_policy[i] = 1.0
+            continue
         objective = lambda p: price_residual(p, s, c_tilde, omega, params) ** 2
-        result = minimize_scalar(objective, bounds=(1e-3, 50.0), method='bounded')
+        result = minimize_scalar(objective, bounds=(1e-3, 50.0), method='bounded',options={"xatol": 1e-12})
         p_policy[i] = result.x
         if not result.success or math.sqrt(result.fun) > 1e-6:
+            # print("Warning: No Convergence at s =", s, "p =", result.x, "residual =", math.sqrt(result.fun), "message =", result.message)
+            price_converged = False
+        elif proxy_profit(result.x, s, c_tilde, omega, params) < 0.0:
+            # print("Warning: Negative profit at s =", s, "p =", result.x)
             price_converged = False
     return p_policy, price_converged
 
@@ -369,7 +413,7 @@ def solve_value_function(params, tol=1e-4, maxiter=1000,conv="policy"):
         p_policy_current[:, j] = p_col
         if not p_conv:
             all_price_converged = False
-
+    
     if not all_price_converged:
         return {
             "v":          v_by_omega @ params.pi_omega,
@@ -402,7 +446,7 @@ def solve_value_function(params, tol=1e-4, maxiter=1000,conv="policy"):
         )
 
         if conv == "policy" and it > 10:
-            diff = float(np.max(np.abs(n_policy_current - n_policy_prev)))
+            diff = float(np.mean(np.abs(n_policy_current - n_policy_prev)))
             n_policy_prev = n_policy_current.copy()
         else:
             diff = float(np.max(np.abs(v_by_omega_new - v_by_omega)))

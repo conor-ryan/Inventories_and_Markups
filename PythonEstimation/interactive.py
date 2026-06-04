@@ -48,7 +48,7 @@ def _print_comparison(name, py_arr, jl_arr):
 
 
 # %% Target parameterization from SolveModel.jl line 6
-ns = 200
+ns = 400
 params = Parameters(
     c=1.0,
     fc=0.0,
@@ -56,11 +56,11 @@ params = Parameters(
     sigma_eta2=0.05,
     rho_omega=0.1,
     gamma=0.9,
-    delta=0.01,
-    beta=0.95,
-    epsilon=8.0,
+    delta=0.005,
+    beta=0.995,
+    epsilon=16.0,
     mu_nu=1.0,
-    sigma_nu2=0.15,
+    sigma_nu2=0.05,
     ns=ns,
     scale=1.0,
     size=100.0,
@@ -210,10 +210,10 @@ vcov_sim_true = compute_simulation_variance(
 
 W_sim= np.linalg.inv(vcov_sim_true + vcov)
 
-avar_true = compute_ii_asymptotic_variance(
-    params_true, W_sim, n_firms=5000, n_years=20, seed=0,
-)
-print("\nSimulation vcov and avar computed at true parameters.")
+# avar_true = compute_ii_asymptotic_variance(
+#     params_true, W_sim, n_firms=5000, n_years=20, seed=0,
+# )
+# print("\nSimulation vcov and avar computed at true parameters.")
 
 
 df_grid = pd.read_csv(grid_path)
@@ -231,6 +231,15 @@ params_grid = Parameters(
     gamma=init_guess[0],      mu_eta=init_guess[1],     sigma_eta2=init_guess[2],
     rho_omega=init_guess[3],  sigma_nu2=init_guess[4],  epsilon=init_guess[5],
     delta=init_guess[6],
+)
+print(
+    f"params_grid: c={params_grid.c:.4f}  fc={params_grid.fc:.4f}  beta={params_grid.beta:.4f}"
+    f"  gamma={params_grid.gamma:.4f}  delta={params_grid.delta:.4f}"
+    f"  epsilon={params_grid.epsilon:.4f}  mu_eta={params_grid.mu_eta:.4f}"
+    f"  sigma_eta2={params_grid.sigma_eta2:.4f}  rho_omega={params_grid.rho_omega:.4f}"
+    f"  mu_nu={params_grid.mu_nu:.4f}  sigma_nu2={params_grid.sigma_nu2:.4f}"
+    f"  ns={params_grid.ns}  size={params_grid.size:.1f}"
+    f"  q_omega={params_grid.q_omega}  smax={params_grid.smax:.4f}"
 )
 sol_grid     = solve_value_function(params_grid)
 moments_grid = simulate_all_moments(
@@ -300,7 +309,7 @@ ii_result = tiktak(
     df_grid,
     target_moments,
     W,
-    params_base=params,
+    params_base=params_grid,
     n_firms=500,
     n_years=20,
     seed=212311,

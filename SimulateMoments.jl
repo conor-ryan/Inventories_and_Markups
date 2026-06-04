@@ -5,14 +5,14 @@ include("EstimationFunctions.jl")
 
 # Parameter Bounds
 ϵ_bounds   = (4.0, 20.0)
-σν2_bounds = (0.001, 0.8)
-δ_bounds   = (0.001, 0.2)
-μω_bounds  = (0.001, 0.1)
-γ_bounds   = (0.7, 1.5)
-ση2_bounds = (0.01, 0.1)
-ρ_bounds   = (0.05, 0.9)
+σν2_bounds = (0.01, 0.3)
+δ_bounds   = (0.01, 0.2)
+μω_bounds  = (0.01, 0.2)
+γ_bounds   = (0.8, 1.5)
+ση2_bounds = (0.1, 1.0)
+ρ_bounds   = (0.00, 0.9)
 
-n_param_points = 100000
+n_param_points = 250
 param_bounds = [
     γ_bounds,
     μω_bounds,
@@ -52,7 +52,8 @@ df_out = compute_moments_on_grid(
     n_firms=500,
     n_years=20,
     seed=212311,
-    max_value_iterations=5000,
+    max_value_iterations=500,
+    grid_size = 200, scale = 1.0, size = 100.0, solve_tol = 1e-2,
     output_path=output_path
 )
 
@@ -72,11 +73,12 @@ println("Saved: $(output_path)")
 fail_fraction = sum(df_out.failed) / nrow(df_out)
 @printf("Failure fraction: %.4f (%d / %d)\n", fail_fraction, sum(df_out.failed), nrow(df_out))
 
-df_success = df_out[.!df_out.failed, :]
+
+df_success = df_out[(.!df_out.failed ).& (df_out.avg_isr.<4.0), :]
 if nrow(df_success) == 0
     println("No successful simulations; moment summaries unavailable.")
 else
-    println("\nMoment summaries (successful simulations only):")
+    println("\nMoment summaries (successful simulations, $(nrow(df_success))):")
     println("moment, min,p10, p25, median, p75, p90,max")
 
     moment_cols = [:avg_isr, :var_log1p_isr, :avg_gross_margin, :γ_OLS, :ρ_ω, :σ_η2, :avg_opex_sales]
@@ -98,3 +100,33 @@ else
         end
     end
 end
+
+# df_out[!,:μω] = exp.(df_out[!,:μη]./(1 .- df_out[!,:ρω]))
+
+# df_success = df_out[.!df_out.failed, :]
+# # df_success = df_success[df_success[!,:γ_OLS].>0,:]
+# if nrow(df_success) == 0
+#     println("No successful simulations; moment summaries unavailable.")
+# else
+#     println("\nParameter summaries (successful simulations only):")
+#     println("parameter, min,p10, p25, median, p75, p90,max")
+
+#     moment_cols = [:γ, :μω, :ση2, :ρω, :σν2, :ϵ, :δ]
+#     for col in moment_cols
+#         vals = collect(skipmissing(df_success[!, col]))
+#         vals = vals[isfinite.(vals)]
+#         if isempty(vals)
+#             @printf("%s, NaN, NaN, NaN, NaN, NaN, NaN, NaN\n", String(col))
+#         else
+#             @printf("%s,%.6f, %.6f, %.6f, %.6f, %.6f,%.6f, %.6f\n",
+#                     String(col),
+#                     minimum(vals),
+#                     quantile(vals, 0.10),
+#                     quantile(vals, 0.25),
+#                     quantile(vals, 0.50),
+#                     quantile(vals, 0.75),
+#                     quantile(vals, 0.90),
+#                     maximum(vals))
+#         end
+#     end
+# end

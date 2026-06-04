@@ -13,11 +13,11 @@ params = Parameters(
     ση2=0.05,
     ρ_ω=0.1,
     γ=0.9,
-    δ=0.01,
-    β=0.95,
-    ϵ=8.0,
+    δ=0.005,
+    β=0.995,
+    ϵ=16.0,
     μν=1.0,
-    σν2=0.15,
+    σν2=0.05,
     Ns=Ns,
     scale=1.0,
     size=100.0,
@@ -25,7 +25,7 @@ params = Parameters(
 
 V, n_policy, p_policy, V_by_omega, converged = solve_value_function(
     params;
-    tol=1e-4,
+    tol=1e-3,
     maxiter=1000,
     full=false,
     fast_interp=true,

@@ -101,8 +101,10 @@ struct Parameters
         demand_dist = LogNormal(μ, σ)
 
         # Create inventory state grid
-        Smax=quantile(demand_dist,0.85)*(ϵ - 1)/ϵ 
-        Sgrid_vec = collect(range(0.5*minimum(x_lognormal), Smax, length=Ns))
+        lim_p = limit_price(demand_dist, ϵ, γ, c, ω_grid_vec[1])
+        Smax=quantile(demand_dist,0.95)*(lim_p)^(-ϵ)
+        # Smax=quantile(demand_dist,0.45)*(ϵ - 1)/ϵ 
+        Sgrid_vec = collect(range(0.0, Smax, length=Ns))
 
         new(c, fc, μη, ση2, ρ_ω, length(ω_grid_vec), ω_grid_vec, P_ω_mat, π_ω_vec,
             γ, δ, β, ϵ, μν, σν2,demand_dist , Q, x, w, x_lognormal, gl_x, gl_w, Smax, Ns, Sgrid_vec,size)
@@ -123,7 +125,7 @@ function solve_model(params; full=false, verbose=false, fast_interp=true, maxite
     if verbose
         println("Solving value function...")
     end
-    V, order_policy, p_policy, V_by_omega, converged = solve_value_function(params, full=full, fast_interp=fast_interp, maxiter=maxiter, tol=tol, conv=conv)
+    V, order_policy, p_policy, V_by_omega, converged = solve_value_function(params, full=full, fast_interp=fast_interp, maxiter=maxiter, tol=tol, conv=conv,verbose=verbose)
 
     price_policy_interp_nodes, order_policy_interp_nodes =
         build_fast_policy_interpolants(Sgrid, p_policy, order_policy)
@@ -254,12 +256,19 @@ function solve_price_policy(params::Parameters, c_tilde::Float64, ω::Float64)
 
     for (i, s) in enumerate(Sgrid)
 
-        obj(p) = price_residual(p, s, c_tilde, ω, params)^2
-        result = Optim.optimize(obj, 1e-3, 50.0, Brent(), rel_tol=1e-16, abs_tol=1e-12)
-        p_policy[i] = result.minimizer
-        if !Optim.converged(result) || sqrt(result.minimum) > 1e-6
-            # @warn "solve_price_policy did not converge" s ω residual=sqrt(result.minimum)
-            price_converged = false
+        if s ==0 
+            p_policy[i] = 1.0
+        else
+            obj(p) = price_residual(p, s, c_tilde, ω, params)^2
+            result = Optim.optimize(obj, 1e-3, 50.0, Brent(), rel_tol=1e-16, abs_tol=1e-12)
+            p_policy[i] = result.minimizer
+
+            pi_approx = proxy_profit(p_policy[i],s,c_tilde,ω,params)
+
+            if !Optim.converged(result) || sqrt(result.minimum) > 1e-6 || pi_approx<0
+                # @warn "solve_price_policy did not converge" s ω residual=sqrt(result.minimum)
+                price_converged = false
+            end
         end
     end
 
@@ -312,6 +321,97 @@ function truncated_lognormal_ratio_Eνγ_Eν(νbar::Float64, params::Parameters)
 
     ratio = den > 0.0 ? num / den : 0.0
     return (ratio=ratio, Eνγ=0.5 * num, Eν=0.5 * den)
+end
+
+function proxy_profit(p,s,c_tilde,ω,params)
+    νbar = s * p^params.ϵ
+
+    Fbar = cdf(params.dist, νbar)
+    tail = 1.0 - Fbar
+
+    # # avoid numerical issues
+    # if Fbar < 1e-10
+    #     return 1e6
+    # end
+
+    Eν = truncated_lognormal_mean(νbar, params)
+
+    Eνγ = truncated_lognormal_ratio_Eνγ_Eν(νbar, params).Eνγ
+
+    pi = Fbar * (Eν*p^(-params.ϵ)*(p-c_tilde) - ω*Eνγ*p^(-params.γ*params.ϵ)) + 
+            tail*( (p-c_tilde)*s - ω*s^params.γ)
+    return pi 
+end
+
+function solve_proxy_price_policy(params::Parameters, c_tilde::Float64, ω::Float64)
+    Sgrid = params.Sgrid
+    Ns = params.Ns
+    p_policy = zeros(Ns)
+    price_converged = true
+
+    for (i, s) in enumerate(Sgrid)
+        if s==0
+            p_policy[i] = 1.0
+        else
+            obj(p) =  -proxy_profit(p,s,c_tilde,ω,params)
+            result = Optim.optimize(obj, 1e-3, 2.0, Brent(), rel_tol=1e-16, abs_tol=1e-12)
+            p_policy[i] = result.minimizer
+            if !Optim.converged(result) 
+                @warn "solve_price_policy did not converge" s ω residual=sqrt(result.minimum)
+                price_converged = false
+            end
+        end
+    end
+
+    return p_policy, price_converged
+end
+
+
+# Primitive overload: uses closed-form lognormal moments (νbar=∞ ⟹ unconditional expectations)
+function proxy_profit_unconst(p, c_tilde, ω, dist::LogNormal, ϵ::Float64, γ::Float64)
+    μ_log = dist.μ
+    σ_log = dist.σ
+    Eν  = exp(μ_log + 0.5 * σ_log^2)
+    Eνγ = exp(γ * μ_log + 0.5 * γ^2 * σ_log^2)
+    return Eν * p^(-ϵ) * (p - c_tilde) - ω * Eνγ * p^(-γ * ϵ)
+end
+
+"""
+    is_proxy_profit_unconst_everywhere_negative(dist, ϵ, γ, c_tilde, ω)
+
+Analytical check for whether unconstrained proxy profit is strictly negative for all p > 0.
+"""
+function neg_profit_check(dist::LogNormal, ϵ::Float64, γ::Float64, c_tilde::Float64, ω::Float64)
+    μ_log = dist.μ
+    σ_log = dist.σ
+
+    A = exp(μ_log + 0.5 * σ_log^2)                  # E[ν]
+    B = ω * exp(γ * μ_log + 0.5 * γ^2 * σ_log^2)    # ωE[ν^γ]
+    a = ϵ * (1.0 - γ)
+
+    if c_tilde <= 0.0
+        return false
+    end
+
+    if a < 1.0
+        return false
+    elseif isapprox(a, 1.0; atol=1e-12, rtol=1e-10)
+        return A <= B
+    else
+        Bcrit = A * (a - 1.0)^(a - 1.0) / (a^a * c_tilde^(a - 1.0))
+        return B >= Bcrit
+    end
+end
+
+function neg_profit_check(params::Parameters, c_tilde::Float64, ω::Float64)
+    return neg_profit_check(params.dist, params.ϵ, params.γ, c_tilde, ω)
+end
+
+# Primitive overload: callable before a Parameters object exists
+function limit_price(dist::LogNormal, ϵ::Float64, γ::Float64, c_tilde::Float64, ω::Float64)
+    obj(p) = -proxy_profit_unconst(p, c_tilde, ω, dist, ϵ, γ)
+    result = Optim.optimize(obj, 1e-3, 5.0, Brent(), rel_tol=1e-16, abs_tol=1e-12)
+    return result.minimizer
 end
 
 
@@ -410,14 +510,14 @@ function solve_value_function(params; tol=1e-4, maxiter=1000, full=false, fast_i
                 n_t, v = maximize_expected_value_choice(i, j, D_table, C_table, p_policy_current, ω_grid[j], Vinterp_j, params, n_upper=n_upper)
                 V_by_omega_new[i, j] = v
                 n_policy_current[i, j] = n_t
-                if n_t > 0.0
-                    n_upper = n_t
-                end
+                # if n_t > 0.0
+                #     n_upper = n_t
+                # end
             end
         end
 
         if (conv == :policy) && (iter > 10)
-            diff = maximum(abs.(n_policy_current .- n_policy_prev))
+            diff = mean(abs.(n_policy_current .- n_policy_prev))
             n_policy_prev .= n_policy_current
         else
             diff = maximum(abs.(V_by_omega_new .- V_by_omega))
@@ -460,9 +560,16 @@ function solve_value_function(params; tol=1e-4, maxiter=1000, full=false, fast_i
                 end
             end
 
-            diff = max(maximum(abs.(n_policy_current .- n_policy_prev)),
-                       maximum(abs.(p_policy_current .- p_policy_prev)),
-                       maximum(abs.(V_by_omega_new .- V_by_omega)))
+            # diff = max(maximum(abs.(n_policy_current .- n_policy_prev)),
+            #            maximum(abs.(p_policy_current .- p_policy_prev)),
+            #            maximum(abs.(V_by_omega_new .- V_by_omega)))
+
+            if (conv == :policy) && (iter > 10)
+                diff = max(maximum(abs.(n_policy_current .- n_policy_prev)),
+                       maximum(abs.(p_policy_current .- p_policy_prev)))
+            else
+                diff = maximum(abs.(V_by_omega_new .- V_by_omega))
+            end
 
             n_policy_prev .= n_policy_current
             p_policy_prev .= p_policy_current

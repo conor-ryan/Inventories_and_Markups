@@ -356,13 +356,13 @@ def simulate_all_moments(params, p_policy, n_policy, n_firms, n_years, seed, bur
 # Bounds (used by both pack and unpack)
 # Must match simulate_moments_main.py / SimulateMoments.jl
 _BOUNDS = {
-    "gamma":      (0.5,              1.25),
+    "gamma":      (0.1,              2.0),
     "mu_eta":     (math.log(0.0001), math.log(0.5)),
-    "sigma_eta2": (0.025,            0.15),
+    "sigma_eta2": (0.025,            3.0),
     "rho_omega":  (0.0,              0.9),
-    "sigma_nu2":  (0.01,             0.3),
-    "epsilon":    (4.0,              20.0),
-    "delta":      (0.005,            0.1),
+    "sigma_nu2":  (0.01,             0.6),
+    "epsilon":    (2.0,              30.0),
+    "delta":      (0.001,            0.3),
 }
 
 
@@ -482,6 +482,15 @@ def estimate_params_ii_full(
                 gamma=gamma, delta=delta, beta=params_base.beta,
                 epsilon=epsilon, mu_nu=params_base.mu_nu, sigma_nu2=sigma_nu2,
                 ns=params_base.ns, size=params_base.size,
+            )
+            print(
+                f"  params: c={p.c:.4f}  fc={p.fc:.4f}  beta={p.beta:.4f}"
+                f"  gamma={p.gamma:.4f}  delta={p.delta:.4f}"
+                f"  epsilon={p.epsilon:.4f}  mu_eta={p.mu_eta:.4f}"
+                f"  sigma_eta2={p.sigma_eta2:.4f}  rho_omega={p.rho_omega:.4f}"
+                f"  mu_nu={p.mu_nu:.4f}  sigma_nu2={p.sigma_nu2:.4f}"
+                f"  ns={p.ns}  size={p.size:.1f}"
+                f"  q_omega={p.q_omega}  smax={p.smax:.4f}"
             )
             sol    = solve_value_function(p)
             m_tilde_d = simulate_all_moments(

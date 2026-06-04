@@ -7,12 +7,12 @@ include("SimulationFunctions.jl")
 
 # Parameter Bounds
 ϵ_bounds   = (4.0, 20.0)
-σν2_bounds = (0.01, 0.3)
-δ_bounds   = (0.005, 0.1)
-μη_bounds  = (log(0.0001), log(0.5))
-γ_bounds   = (0.5, 1.25)
-ση2_bounds = (0.025, 0.15)
-ρ_bounds   = (0.0, 0.9)
+σν2_bounds = (0.01, 0.4)
+δ_bounds   = (0.001, 0.2)
+μω_bounds  = (0.01, 0.3)
+γ_bounds   = (0.8, 1.2)
+ση2_bounds = (0.1, 2.0)
+ρ_bounds   = (0.00, 0.5)
 
 num_data = 50
 
@@ -36,24 +36,29 @@ draws_df = DataFrame(
     γ=Float64[], μη=Float64[], ση2=Float64[], ρ_ω=Float64[], σν2=Float64[], ϵ=Float64[], δ=Float64[]
 )
 
-success_id = 0   # consecutive file index; only incremented on successful saves
-attempt = 0
+global success_id = 0   # consecutive file index; only incremented on successful saves
+global attempt = 0
 while success_id < num_data
-    attempt += 1
+    global attempt += 1
     # Always advance rng so later draws are not affected by earlier failures
     γ_draw   = draw_uniform(rng, γ_bounds)
-    μη_draw  = draw_uniform(rng, μη_bounds)
+    μω_draw  = draw_uniform(rng, μω_bounds)
     ση2_draw = draw_uniform(rng, ση2_bounds)
     ρ_draw   = draw_uniform(rng, ρ_bounds)
     σν2_draw = draw_uniform(rng, σν2_bounds)
     ϵ_draw   = draw_uniform(rng, ϵ_bounds)
     δ_draw   = draw_uniform(rng, δ_bounds)
+    μη_draw  = log(μω_draw) * (1.0 - ρ_draw)
     sim_seed = seed + attempt
 
     try
         params = Parameters(c=1.0, fc=0.0, μη=μη_draw, ση2=ση2_draw, ρ_ω=ρ_draw, γ=γ_draw,
-                            δ=δ_draw, β=0.95, ϵ=ϵ_draw, μν=1, σν2=σν2_draw,
-                            Ns=200, scale=1.0, size=100)
+                            δ=δ_draw, ϵ=ϵ_draw, μν=1, σν2=σν2_draw,
+                            Ns=400, scale=1.0, size=100)
+        all_neg_profit = neg_profit_check(params, params.c, maximum(params.ω_grid))
+        if all_neg_profit
+            error("Negative Profit; skipping save.")
+        end
 
         println("[attempt ", attempt, " / ", num_data, "] Simulating panel data...")
         df_monthly, df_annual = simulate_panel_data(params;
@@ -75,7 +80,7 @@ while success_id < num_data
                                                     n_boot=n_boot,
                                                     seed=sim_seed)
 
-        success_id += 1
+        global success_id += 1
         id_str = lpad(string(success_id), 3, '0')
         moments_path     = joinpath(out_dir, "target_moments_id_$(id_str).csv")
         vcov_path        = joinpath(out_dir, "target_moment_vcov_id_$(id_str).csv")

@@ -721,6 +721,10 @@ function compute_moments_on_grid(param_vectors::AbstractVector{<:AbstractVector{
                                   n_years::Int              = 20,
                                   seed::Int                 = 212311,
                                   max_value_iterations::Int = 5000,
+                                  grid_size::Int = 200,
+                                  scale::Float64 = 1.0,
+                                  size::Float64 = 100.0,
+                                  solve_tol = 1e-4,
                                   output_path::String       = "grid_moments.csv")
 
     # --- Validate and convert user-supplied parameter vectors ---------------
@@ -757,6 +761,8 @@ function compute_moments_on_grid(param_vectors::AbstractVector{<:AbstractVector{
     out_avg_opex_sales  = fill(NaN, n_total)
     out_failed          = fill(true, n_total)
     out_inventory_above_grid = fill(false, n_total)
+    # Failure codes: 0=success, 1=negative profit, 2=no convergence, 3=bad moment, 4=other
+    out_fail_code       = fill(Int8(0), n_total)
 
     # --- Progress tracking --------------------------------------------------
     counter    = Threads.Atomic{Int}(0)
@@ -784,14 +790,21 @@ function compute_moments_on_grid(param_vectors::AbstractVector{<:AbstractVector{
                 γ    = γ_i,
                 δ    = δ_i,
                 ϵ    = ϵ_i,
-                σν2  = σν2_i)
+                σν2  = σν2_i,
+                Ns=grid_size, scale=scale, size=size)
 
-            _, n_pol_i, _, _, ppi, opi, _, converged_i = solve_model(params_i,maxiter=max_value_iterations,tol=1e-2,conv=:policy)
-            !converged_i && error("value function did not converge")
-            any(j -> all(n_pol_i[:, j] .== 0.0), 1:params_i.Q_ω) && error("order policy is zero for at least one ω state")
+            all_neg_profit = neg_profit_check(params_i, params_i.c, maximum(params_i.ω_grid))
+            all_neg_profit && error("FAIL_NEGATIVE_PROFIT")
+
+            _, n_pol_i, _, _, ppi, opi, _, converged_i = solve_model(params_i,maxiter=max_value_iterations,tol=solve_tol,conv=:policy)
+            !converged_i && error("FAIL_NO_CONVERGENCE")
 
             row_seed = seed + idx - 1
             m̃ = _simulate_all_moments(params_i, ppi, opi, n_firms, n_years, row_seed)
+
+            
+            # any(j -> all(n_pol_i[:, j] .== 0.0), 1:params_i.Q_ω) && error("FAIL_ZERO_ORDER_POLICY")
+            # m̃.avg_isr>10.0 && error("UNREALISTIC INV-SALES RATIO")
 
             out_avg_isr[idx]  = m̃.avg_isr
             out_var_log1p_isr[idx]  = m̃.var_log1p_isr
@@ -802,8 +815,18 @@ function compute_moments_on_grid(param_vectors::AbstractVector{<:AbstractVector{
             out_avg_opex_sales[idx]  = m̃.avg_opex_sales
             out_inventory_above_grid[idx] = m̃.any_inventory_above_grid
             out_failed[idx]   = false
-        catch
+        catch err
             # Leave NaN outputs and failed = true
+            msg = sprint(showerror, err)
+            if occursin("FAIL_NEGATIVE_PROFIT", msg)
+                out_fail_code[idx] = Int8(1)
+            elseif occursin("FAIL_NO_CONVERGENCE", msg)
+                out_fail_code[idx] = Int8(2)
+            elseif occursin("UNREALISTIC INV-SALES RATIO", msg)
+                out_fail_code[idx] = Int8(3)
+            else
+                out_fail_code[idx] = Int8(4)
+            end
         end
 
         # --- Progress bar ---------------------------------------------------
@@ -842,13 +865,22 @@ function compute_moments_on_grid(param_vectors::AbstractVector{<:AbstractVector{
         σ_η2             = out_σ_η2,
         avg_opex_sales   = out_avg_opex_sales,
         any_inventory_above_grid = out_inventory_above_grid,
-        failed           = out_failed)
+        failed           = out_failed,
+        fail_code       = out_fail_code)
 
     CSV.write(output_path, df_out)
     n_ok = sum(.!out_failed)
+    n_failed = n_total - n_ok
+    frac_fail_neg_profit = n_failed > 0 ? sum(out_fail_code .== Int8(1)) / n_failed : NaN
+    frac_fail_no_conv    = n_failed > 0 ? sum(out_fail_code .== Int8(2)) / n_failed : NaN
+    frac_fail_zero_order = n_failed > 0 ? sum(out_fail_code .== Int8(3)) / n_failed : NaN
+    frac_fail_other      = n_failed > 0 ? sum(out_fail_code .== Int8(4)) / n_failed : NaN
         frac_inventory_above_grid = n_ok > 0 ? mean(out_inventory_above_grid[.!out_failed]) : NaN
         @printf("\nGrid search complete.  %d / %d points succeeded.  Results → %s\n",
             n_ok, n_total, output_path)
+        @printf("Failure fractions (among failed points): negative profit=%.6f, no convergence=%.6f, bad moments=%.6f\n",
+            frac_fail_neg_profit, frac_fail_no_conv, frac_fail_zero_order)
+        @printf("Other/uncategorized failure fraction: %.6f\n", frac_fail_other)
         @printf("Fraction of successful runs with any simulated inventory above Smax: %.6f\n",
             frac_inventory_above_grid)
 

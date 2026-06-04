@@ -43,7 +43,7 @@ function simulate_panel_data(params::Parameters;
     @assert M % 12 == 0 "M must be a multiple of 12 for annual aggregation"
 
     _, _, _, _, price_policy_interp, order_policy_interp, _, vf_converged =
-        solve_model(params, verbose=solve_verbose, maxiter=solve_maxiter)
+        solve_model(params, verbose=solve_verbose, maxiter=solve_maxiter,tol=1e-4,conv=:policy)
     vf_converged || error("solve_model did not converge within solve_maxiter=$(solve_maxiter)")
 
     if !isnothing(seed)

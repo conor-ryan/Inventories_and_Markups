@@ -63,7 +63,7 @@ from global_max import tiktak
 PARAMS_BASE = Parameters(
     c=1.0,
     fc=0.0,
-    beta=0.95,
+    beta=0.995,
     mu_nu=1.0,
     sigma_nu2=0.15,   # placeholder — overridden in objective
     ns=200,

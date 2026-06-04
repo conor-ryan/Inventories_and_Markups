@@ -14,7 +14,7 @@ include("EstimationFunctions.jl")
 ση2_bounds = (0.01, 0.1)
 ρ_bounds   = (0.05, 0.9)
 
-n_param_points = 50
+n_param_points = 10
 param_bounds = [
     γ_bounds,
     μω_bounds,
@@ -36,13 +36,13 @@ end
 # Scenario settings
 # ---------------------------------------------------------------------------
 # A: reference — value function convergence, tight tolerance, fine grid
-NS_A   = 1200
-TOL_A  = 1e-2
+NS_A   = 400
+TOL_A  = 1e-4
 CONV_A = :policy
 MAXITER_A = 5_000
 
 # B: fast — policy function convergence, coarse tolerance, coarser grid
-NS_B   = 400
+NS_B   = 200
 TOL_B  = 1e-2
 CONV_B = :policy
 MAXITER_B = 5_000
