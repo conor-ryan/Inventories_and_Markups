@@ -251,6 +251,11 @@ def compute_annual_auxiliary(tot_opex, tot_sales, tot_rev):
     log_opex  = np.log(tot_opex).ravel()
     log_sales = np.log(tot_sales).ravel()
 
+    if not np.isfinite(log_opex).all():
+        raise ValueError("Non-positive opex values found; cannot take log.")
+    if not np.isfinite(log_sales).all():
+        raise ValueError("Non-positive sales values found; cannot take log.")
+
     # OLS: log_opex = a + gamma * log_sales
     X               = np.column_stack([np.ones(len(log_opex)), log_sales])
     coeffs, _, _, _ = np.linalg.lstsq(X, log_opex, rcond=None)
