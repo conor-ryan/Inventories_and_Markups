@@ -102,7 +102,7 @@ struct Parameters
 
         # Create inventory state grid
         lim_p = limit_price(demand_dist, ϵ, γ, c, ω_grid_vec[1])
-        Smax=quantile(demand_dist,0.95)*(lim_p)^(-ϵ)
+        Smax=1.5*quantile(demand_dist,0.95)*(lim_p)^(-ϵ)
         # Smax=quantile(demand_dist,0.45)*(ϵ - 1)/ϵ 
         Sgrid_vec = collect(range(0.0, Smax, length=Ns))
 

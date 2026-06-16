@@ -48,7 +48,7 @@ def _print_comparison(name, py_arr, jl_arr):
 
 
 # %% Target parameterization from SolveModel.jl line 6
-ns = 400
+ns = 200
 params = Parameters(
     c=1.0,
     fc=0.0,

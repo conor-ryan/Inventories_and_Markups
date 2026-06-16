@@ -356,31 +356,27 @@ def _vfi_sweep(ev_all, d_table, c_table, p_policy, sgrid,
     """Single compiled VFI sweep over all inventory and omega states.
     ev_all: (n_omega, ns) — row j is the continuation-value vector for omega j.
     d_table, c_table: (n_omega, ns, Q) — j-axis outer; each thread owns one contiguous (ns, Q) slab.
+    Parallelized over all n_omega * ns cells; each cell is independent (n_upper fixed at sgrid[-1]).
     """
     n_omega = d_table.shape[0]
     ns      = d_table.shape[1]
-    # Allocate (n_omega, ns) so thread j writes exclusively to row j — a private
-    # contiguous ns-element region.  Avoids false sharing that would occur if
-    # adjacent threads wrote to adjacent columns of an (ns, n_omega) array where
-    # each row spans a single 64-byte cache line.
+    n_upper = sgrid[ns - 1]
     v_new_t = np.zeros((n_omega, ns))
     n_pol_t = np.zeros((n_omega, ns))
-    for j in prange(n_omega):
-        ev_j    = ev_all[j, :]      # contiguous row used as vinterp_vals
-        n_upper = sgrid[ns - 1]
-        for i in range(ns):
-            s     = sgrid[i]
-            d_col = d_table[j, i, :]
-            c_col = c_table[j, i, :]
-            p     = p_policy[i, j]
-            n_t, v_t = _optimize_n(
-                s, d_col, c_col, p, ev_j, s_lo, inv_h,
-                fc, c_param, delta, beta, quad_weights, n_upper,
-            )
-            v_new_t[j, i] = v_t
-            n_pol_t[j, i] = n_t
-            if n_t > 0.0:
-                n_upper = n_t
+    for idx in prange(n_omega * ns):
+        j     = idx // ns
+        i     = idx  % ns
+        s     = sgrid[i]
+        d_col = d_table[j, i, :]
+        c_col = c_table[j, i, :]
+        p     = p_policy[i, j]
+        ev_j  = ev_all[j, :]
+        n_t, v_t = _optimize_n(
+            s, d_col, c_col, p, ev_j, s_lo, inv_h,
+            fc, c_param, delta, beta, quad_weights, n_upper,
+        )
+        v_new_t[j, i] = v_t
+        n_pol_t[j, i] = n_t
     return v_new_t.T, n_pol_t.T
 
 

@@ -6,7 +6,7 @@ Ns = 400
 # df_params = CSV.read("../SimulatedData/true_parameters_id_002.csv", DataFrame)
 # r = df_params[1, :]
 # params = Parameters(c=1.0, fc=0.0, μη=Float64(r.μη),ση2=Float64(r.ση2),ρ_ω=Float64(r.ρ_ω), γ=Float64(r.γ),δ=Float64(r.δ), β=0.95, ϵ=Float64(r.ϵ), μν=1, σν2=Float64(r.σν2),Ns=Ns,scale=1.0,size=100.0)
-params = Parameters(c=1.0, fc=0.0, μη=log(0.01),ση2=0.05,ρ_ω=0.1, γ=1.1,δ=0.005, β=0.995, ϵ=16.0, μν=1.0, σν2=0.05,Ns=Ns,scale=1.0,size=200.0)
+params = Parameters(c=1.0, fc=0.0, μη=log(0.05),ση2=0.05,ρ_ω=0.1, γ=1.0,δ=0.05, β=0.995, ϵ=8.0, μν=1.0, σν2=0.25,Ns=Ns,scale=1.0,size=100.0)
 # params = Parameters(c=1.0, fc=0.0, μη=-1.14608,ση2=0.768512,ρ_ω=0.404428, γ=1.06935,δ=0.05, β=0.995, ϵ=13.6956, μν=1.0, σν2=0.386298,Ns=Ns,scale=1.0,size=200.0)
 
 # ---------------------------------------------------
