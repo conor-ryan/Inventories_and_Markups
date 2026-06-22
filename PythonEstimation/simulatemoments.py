@@ -37,7 +37,7 @@ from simulation_functions import halton_param_vectors, compute_moments_on_grid
 # Order: [γ, μω→μη, ση2, ρ, σν2, ε, δ]
 # μω is drawn then converted: μη = log(μω) * (1 − ρ)
 BOUNDS = [
-    (4.0,  40.0),   # ε
+    (4.0,  30.0),   # ε
     (0.01,  0.4),   # σν2
     (0.005, 0.2),   # δ
     (0.01,  0.2),   # μω  (converted to μη below)
