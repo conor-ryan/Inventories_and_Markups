@@ -62,7 +62,7 @@ SIZE      = 100.0
 SOLVE_TOL = 1e-2
 MAX_VFI   = 500
 
-OUT_DIR ="C:\\Users\\cxr5626\\Dropbox\\CRW_inventory_competition\\SimulatedDataSimulatedData"
+OUT_DIR ="SimulatedData"
 
 # ---------------------------------------------------------------------------
 # Generate Halton draws in BOUNDS order
