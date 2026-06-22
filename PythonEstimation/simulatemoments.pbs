@@ -1,0 +1,21 @@
+#!/bin/bash
+#PBS -N simulate_moments
+#PBS -J 1-25
+#PBS -l select=1:ncpus=8:mem=16gb
+#PBS -l walltime=08:00:00
+#PBS -o logs/simulatemoments_^array_index^.out
+#PBS -e logs/simulatemoments_^array_index^.err
+#PBS -v PBS_ARRAY_N_TASKS=25
+
+# Number of tasks must match the -J upper bound above.
+# ncpus controls how many Numba threads each task gets; set
+# NUMBA_NUM_THREADS to the same value for explicit control.
+
+set -euo pipefail
+
+cd "$PBS_O_WORKDIR"
+mkdir -p logs
+
+export NUMBA_NUM_THREADS=${PBS_NCPUS:-8}
+
+python simulatemoments.py

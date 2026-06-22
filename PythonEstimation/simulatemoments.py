@@ -2,13 +2,22 @@
 
 Python translation of SimulateMoments.jl.
 
-Generates a Halton parameter grid, slices it by SLURM array task ID, and
+Generates a Halton parameter grid, slices it by job-array task ID, and
 evaluates all 7 estimation moments sequentially over the slice.  Inner
 parallelism (Numba threads) handles each solve_value_function call.
-Outer parallelism is via the SLURM job array.
+Outer parallelism is via the job array.
+
+Supports PBS Pro and SLURM job arrays.
+  PBS  : reads PBS_ARRAY_INDEX (task id) and PBS_ARRAY_N_TASKS (total tasks,
+         set explicitly in the PBS script via -v PBS_ARRAY_N_TASKS=N).
+  SLURM: reads SLURM_ARRAY_TASK_ID and SLURM_ARRAY_TASK_COUNT.
+  None : runs as a single task over all parameter vectors.
 
 Usage (single node):
     python simulatemoments.py
+
+Usage (PBS Pro job array):
+    qsub -J 1-N -v PBS_ARRAY_N_TASKS=N simulatemoments.pbs
 
 Usage (SLURM job array):
     #SBATCH --array=1-N
@@ -76,10 +85,17 @@ for v in raw_vectors:
     param_vectors.append(np.array([gamma_i, mu_eta_i, sig2_i, rho_i, snu2_i, eps_i, delta_i]))
 
 # ---------------------------------------------------------------------------
-# SLURM array slicing
+# Job-array slicing  (PBS Pro and SLURM)
 # ---------------------------------------------------------------------------
-task_id = int(os.environ.get("SLURM_ARRAY_TASK_ID",    "1"))
-n_tasks = int(os.environ.get("SLURM_ARRAY_TASK_COUNT", "1"))
+if "PBS_ARRAY_INDEX" in os.environ:
+    task_id = int(os.environ["PBS_ARRAY_INDEX"])
+    n_tasks = int(os.environ.get("PBS_ARRAY_N_TASKS", "1"))
+elif "SLURM_ARRAY_TASK_ID" in os.environ:
+    task_id = int(os.environ["SLURM_ARRAY_TASK_ID"])
+    n_tasks = int(os.environ["SLURM_ARRAY_TASK_COUNT"])
+else:
+    task_id = 1
+    n_tasks = 1
 
 chunk_size = math.ceil(len(param_vectors) / n_tasks)
 i_start    = (task_id - 1) * chunk_size          # 0-based
