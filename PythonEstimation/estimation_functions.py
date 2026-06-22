@@ -249,9 +249,9 @@ def compute_annual_auxiliary(tot_opex, tot_sales, tot_rev):
     dict with keys: gamma_OLS, rho_omega, sigma_eta2, avg_opex_sales
     """
 
-    if not np.all(log_opex>0):
+    if not np.all(tot_opex>0):
         raise ValueError("Non-positive opex values found; cannot take log.")
-    if not np.all(log_sales>0):
+    if not np.all(tot_sales>0):
         raise ValueError("Non-positive sales values found; cannot take log.")
 
     log_opex  = np.log(tot_opex).ravel()
