@@ -50,7 +50,7 @@ BOUNDS = [
 # [γ, μη, ση2, ρω, σν2, ε, δ]
 # We draw in BOUNDS order then rearrange after the μω→μη transform.
 
-N_PARAM_POINTS = 200
+N_PARAM_POINTS = 2500
 SEED           = 212311
 
 N_FIRMS   = 500
