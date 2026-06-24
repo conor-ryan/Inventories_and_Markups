@@ -131,9 +131,10 @@ def compute_moments_on_grid(
     out_rho_ar1          = np.full(n_total, np.nan)
     out_sig_eta2         = np.full(n_total, np.nan)
     out_avg_opex_sales   = np.full(n_total, np.nan)
-    out_failed           = np.ones(n_total, dtype=bool)
+    out_failed                   = np.ones(n_total, dtype=bool)
+    out_inventory_above_grid     = np.zeros(n_total, dtype=bool)
     # Fail codes: 0=success, 1=neg profit, 2=no convergence, 3=other
-    out_fail_code        = np.zeros(n_total, dtype=np.int8)
+    out_fail_code                = np.zeros(n_total, dtype=np.int8)
 
     report_step = max(20, n_total // 40)
     t_start = time.time()
@@ -197,14 +198,15 @@ def compute_moments_on_grid(
             out_gamma_ols[idx]      = m["γ_OLS"]
             out_rho_ar1[idx]        = m["ρ_ω"]
             out_sig_eta2[idx]       = m["σ_η2"]
-            out_avg_opex_sales[idx] = m["avg_opex_sales"]
-            out_failed[idx]         = False
+            out_avg_opex_sales[idx]      = m["avg_opex_sales"]
+            out_inventory_above_grid[idx] = bool(m["any_inventory_above_grid"])
+            out_failed[idx]               = False
 
         except Exception as e:
             msg = str(e)
             if "FAIL_NEGATIVE_PROFIT" not in msg and "FAIL_NO_CONVERGENCE" not in msg:
                 out_fail_code[idx] = 3
-
+                print(f"Grid point {idx+1}/{n_total} failed with unexpected error: {msg}")
         # Progress bar
         done = idx + 1
         if done % report_step == 0 or done == n_total:
@@ -239,9 +241,10 @@ def compute_moments_on_grid(
         "gamma_OLS":          out_gamma_ols,
         "rho_omega_ar1":      out_rho_ar1,
         "sigma_eta2_ar1":     out_sig_eta2,
-        "avg_opex_sales":     out_avg_opex_sales,
-        "failed":             out_failed,
-        "fail_code":          out_fail_code,
+        "avg_opex_sales":              out_avg_opex_sales,
+        "any_inventory_above_grid":   out_inventory_above_grid,
+        "failed":                     out_failed,
+        "fail_code":                  out_fail_code,
     })
 
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
@@ -258,5 +261,7 @@ def compute_moments_on_grid(
             f"no_convergence={int((fc==2).sum())}, "
             f"other={int((fc==3).sum())}"
         )
+    frac_above_grid = out_inventory_above_grid[~out_failed].mean() if n_ok > 0 else float("nan")
+    print(f"Fraction of successful runs with any simulated inventory above Smax: {frac_above_grid:.6f}")
 
     return df_out

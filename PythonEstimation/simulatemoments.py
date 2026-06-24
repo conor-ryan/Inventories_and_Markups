@@ -37,20 +37,20 @@ from simulation_functions import halton_param_vectors, compute_moments_on_grid
 # Order: [γ, μω→μη, ση2, ρ, σν2, ε, δ]
 # μω is drawn then converted: μη = log(μω) * (1 − ρ)
 BOUNDS = [
-    (4.0,  30.0),   # ε
-    (0.01,  0.4),   # σν2
-    (0.005, 0.2),   # δ
+    (4.0,  20.0),   # ε
+    (0.01,  0.3),   # σν2
+    (0.01, 0.2),   # δ
     (0.01,  0.2),   # μω  (converted to μη below)
     (0.8,   1.5),   # γ
-    (0.1,   1.0),   # ση2
-    (0.00,  0.9),   # ρ
+    (0.1,   0.5),   # ση2
+    (0.00,  0.3),   # ρ
 ]
 
 # Matching the field order expected by compute_moments_on_grid:
 # [γ, μη, ση2, ρω, σν2, ε, δ]
 # We draw in BOUNDS order then rearrange after the μω→μη transform.
 
-N_PARAM_POINTS = 2500
+N_PARAM_POINTS = 200
 SEED           = 212311
 
 N_FIRMS   = 500
@@ -58,7 +58,7 @@ N_YEARS   = 20
 BURN_IN   = 100
 GRID_SIZE = 200
 SCALE     = 1.0
-SIZE      = 100.0
+SIZE      = 1.0
 SOLVE_TOL = 1e-2
 MAX_VFI   = 500
 
@@ -138,7 +138,7 @@ print(f"Saved: {output_path}")
 fail_frac = df_out["failed"].mean()
 print(f"Failure fraction: {fail_frac:.4f} ({df_out['failed'].sum()} / {len(df_out)})")
 
-df_success = df_out[(~df_out["failed"]) & (df_out["avg_isr"] < 4.0)]
+df_success = df_out[(~df_out["failed"])]
 if len(df_success) == 0:
     print("No successful simulations; moment summaries unavailable.")
 else:

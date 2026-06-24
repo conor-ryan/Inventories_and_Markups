@@ -333,9 +333,12 @@ def simulate_all_moments(params, p_policy, n_policy, n_firms, n_years, seed, bur
     inv_out, dem_out, rev_out, exp_out = simulate_firm(
         n_firms, n_months, p_policy, n_policy, params, seed=seed, burn_in=burn_in,
     )
-
+    if not np.all(rev_out>0):
+        raise ValueError("Non-positive revenue values found")
     # Monthly moments
     mo = compute_monthly_moments(inv_out, dem_out, rev_out, params.c)
+
+    any_inventory_above_grid = bool(np.any(inv_out > params.smax))
 
     # Annual aggregation: reshape (n_firms, n_years, 12) then sum over months
     tot_opex  = exp_out.reshape(n_firms, n_years, 12).sum(axis=2)   # (n_firms, n_years)
@@ -345,13 +348,14 @@ def simulate_all_moments(params, p_policy, n_policy, n_firms, n_years, seed, bur
     ann = compute_annual_auxiliary(tot_opex, tot_sales, tot_rev)
 
     return {
-        "avg_isr":          mo["avg_isr"],
-        "var_log1p_isr":    mo["var_log1p_isr"],
-        "avg_gross_margin": mo["avg_gross_margin"],
-        "γ_OLS":            ann["γ_OLS"],
-        "ρ_ω":          ann["ρ_ω"],
-        "σ_η2":           ann["σ_η2"],
-        "avg_opex_sales": ann["avg_opex_sales"],
+        "avg_isr":                   mo["avg_isr"],
+        "var_log1p_isr":             mo["var_log1p_isr"],
+        "avg_gross_margin":          mo["avg_gross_margin"],
+        "γ_OLS":                     ann["γ_OLS"],
+        "ρ_ω":                       ann["ρ_ω"],
+        "σ_η2":                      ann["σ_η2"],
+        "avg_opex_sales":            ann["avg_opex_sales"],
+        "any_inventory_above_grid":  any_inventory_above_grid,
     }
 
 

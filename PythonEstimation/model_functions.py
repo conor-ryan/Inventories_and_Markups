@@ -65,7 +65,7 @@ class Parameters:
         q=19,
         q_omega=7,
         scale=1.0,
-        size=100.0,
+        size=1.0,
         ns=400,
     ):
         x, w = hermgauss(q)
@@ -122,7 +122,7 @@ class Parameters:
         sigma_nu2_back = sigma_nu2_adj / ((scale_parameter ** 2) * (size ** 2))
 
         lim_p = limit_price(mu, sigma, epsilon, gamma, c_adj, omega_grid[0])
-        smax = math.exp(mu + sigma * NORMAL.inv_cdf(0.95)) * lim_p ** (-epsilon)
+        smax = 1.5*math.exp(mu + sigma * NORMAL.inv_cdf(0.95)) * lim_p ** (-epsilon)
         sgrid = np.linspace(0.0, smax, ns)
 
         self.c = float(c_adj)
