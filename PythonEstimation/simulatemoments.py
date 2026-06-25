@@ -39,7 +39,7 @@ from simulation_functions import halton_param_vectors, compute_moments_on_grid
 BOUNDS = [
     (4.0,  20.0),   # ε
     (0.01,  0.3),   # σν2
-    (0.01, 0.2),   # δ
+    (0.01, 0.1),   # δ
     (0.01,  0.2),   # μω  (converted to μη below)
     (0.8,   1.5),   # γ
     (0.1,   0.5),   # ση2
