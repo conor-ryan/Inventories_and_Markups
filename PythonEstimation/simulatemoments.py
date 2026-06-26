@@ -27,6 +27,13 @@ Usage (SLURM job array):
 import os
 import math
 
+import numba
+numba.set_num_threads(int(
+    os.environ.get("SLURM_CPUS_PER_TASK") or
+    os.environ.get("NCPUS") or
+    os.cpu_count() or 1
+))
+
 import numpy as np
 
 from simulation_functions import halton_param_vectors, compute_moments_on_grid
