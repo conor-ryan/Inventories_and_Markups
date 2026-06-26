@@ -9,7 +9,7 @@
 #SBATCH --mem=16G
 #SBATCH --account=econ_crch_research
 #SBATCH --partition=basic
-#SBATCH --array=1-4
+##SBATCH --array=1-4
 set -euo pipefail
 
 # Run from the directory containing this script.
