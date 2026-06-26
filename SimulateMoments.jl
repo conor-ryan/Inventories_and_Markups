@@ -9,10 +9,10 @@ include("EstimationFunctions.jl")
 δ_bounds   = (0.01, 0.2)
 μω_bounds  = (0.01, 0.2)
 γ_bounds   = (0.8, 1.5)
-ση2_bounds = (0.1, 1.0)
-ρ_bounds   = (0.00, 0.9)
+ση2_bounds = (0.1, 0.5)
+ρ_bounds   = (0.00, 0.3)
 
-n_param_points = 100
+n_param_points = 200
 param_bounds = [
     γ_bounds,
     μω_bounds,
@@ -53,7 +53,7 @@ df_out = compute_moments_on_grid(
     n_years=20,
     seed=212311,
     max_value_iterations=500,
-    grid_size = 200, scale = 1.0, size = 100.0, solve_tol = 1e-2,
+    grid_size = 200, scale = 1.0, size = 1.0, solve_tol = 1e-2,
     output_path=output_path
 )
 
@@ -74,7 +74,7 @@ fail_fraction = sum(df_out.failed) / nrow(df_out)
 @printf("Failure fraction: %.4f (%d / %d)\n", fail_fraction, sum(df_out.failed), nrow(df_out))
 
 
-df_success = df_out[(.!df_out.failed ).& (df_out.avg_isr.<4.0), :]
+df_success = df_out[(.!df_out.failed ),:]#.& (df_out.avg_isr.<100.0), :]
 if nrow(df_success) == 0
     println("No successful simulations; moment summaries unavailable.")
 else

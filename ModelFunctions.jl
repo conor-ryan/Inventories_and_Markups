@@ -31,7 +31,7 @@ struct Parameters
     Sgrid::Vector{Float64}
     size::Float64
 
-    function Parameters(; c=1.0, μη=0.0, ση2=0.0, ρ_ω=0.9, γ=1.0, δ=0.2, ϵ=2.0, σν2=0.15, μν=1.0, β=0.995, fc=0.0,  Q=19, Q_ω=7, scale=1.0, size=100,  Ns=200)
+    function Parameters(; c=1.0, μη=0.0, ση2=0.0, ρ_ω=0.9, γ=1.0, δ=0.2, ϵ=2.0, σν2=0.15, μν=1.0, β=0.995, fc=0.0,  Q=19, Q_ω=7, scale=1.0, size=1.0,  Ns=200)
                 
         x, w = gausshermite(Q)
         gl_x, gl_w = gausslegendre(Q)
@@ -376,6 +376,11 @@ function proxy_profit_unconst(p, c_tilde, ω, dist::LogNormal, ϵ::Float64, γ::
     return Eν * p^(-ϵ) * (p - c_tilde) - ω * Eνγ * p^(-γ * ϵ)
 end
 
+
+# Primitive overload: uses closed-form lognormal moments (νbar=∞ ⟹ unconditional expectations)
+function proxy_profit_frictionless(p, c_tilde, ω, ν::Float64, ϵ::Float64, γ::Float64)
+    return ν * p^(-ϵ) * (p - c_tilde) - ω * ν^γ * p^(-γ * ϵ)
+end
 """
     is_proxy_profit_unconst_everywhere_negative(dist, ϵ, γ, c_tilde, ω)
 
@@ -413,6 +418,13 @@ function limit_price(dist::LogNormal, ϵ::Float64, γ::Float64, c_tilde::Float64
     result = Optim.optimize(obj, 1e-3, 5.0, Brent(), rel_tol=1e-16, abs_tol=1e-12)
     return result.minimizer
 end
+
+function frictionless_price(ν::Float64, ϵ::Float64, γ::Float64, c_tilde::Float64, ω::Float64)
+    obj(p) = -proxy_profit_frictionless(p, c_tilde, ω, ν, ϵ, γ)
+    result = Optim.optimize(obj, 1e-3, 2.5, Brent(), rel_tol=1e-16, abs_tol=1e-12)
+    return result.minimizer
+end
+
 
 
 """
@@ -993,9 +1005,8 @@ function simulate_firm(rng::AbstractRNG, num_simulations::Int, num_periods::Int,
         for period in 1:num_periods
             k = base_idx + period
             all_inventory_levels[k] = s_current
-
             p_opt     = price_policy_interp(s_current, ω_idx)
-            n_opt     = order_policy_interp(s_current, ω_idx)
+            n_opt     = max(order_policy_interp(s_current, ω_idx),0.0)
             ω_current = params.ω_grid[ω_idx]
             ν         = rand(rng, params.dist)
             D         = min(ν * p_opt^(-params.ϵ), s_current)

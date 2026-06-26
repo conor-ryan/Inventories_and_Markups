@@ -2,12 +2,12 @@ using Distributions, LinearAlgebra, Optim, FastGaussQuadrature, Plots, Interpola
 include("ModelFunctions.jl")
 include("EstimationFunctions.jl")
 
-Ns = 400
+Ns = 500
 # df_params = CSV.read("../SimulatedData/true_parameters_id_002.csv", DataFrame)
 # r = df_params[1, :]
 # params = Parameters(c=1.0, fc=0.0, μη=Float64(r.μη),ση2=Float64(r.ση2),ρ_ω=Float64(r.ρ_ω), γ=Float64(r.γ),δ=Float64(r.δ), β=0.95, ϵ=Float64(r.ϵ), μν=1, σν2=Float64(r.σν2),Ns=Ns,scale=1.0,size=100.0)
 params = Parameters(c=1.0, fc=0.0, μη=log(0.05),ση2=0.05,ρ_ω=0.1, γ=1.0,δ=0.05, β=0.995, ϵ=8.0, μν=1.0, σν2=0.25,Ns=Ns,scale=1.0,size=100.0)
-# params = Parameters(c=1.0, fc=0.0, μη=-1.14608,ση2=0.768512,ρ_ω=0.404428, γ=1.06935,δ=0.05, β=0.995, ϵ=13.6956, μν=1.0, σν2=0.386298,Ns=Ns,scale=1.0,size=200.0)
+# params = Parameters(c=1.0, fc=0.0, μη=-1.56706 ,ση2= 0.815515 ,ρ_ω=0.342257, γ= 1.35885,δ=0.014719 , β=0.995, ϵ=27.9091, μν=1.0, σν2=0.138116,Ns=Ns,scale=1.0,size=1.0)
 
 # ---------------------------------------------------
 # Single-iteration benchmark (run interactively before the full solve)
@@ -50,7 +50,7 @@ params = Parameters(c=1.0, fc=0.0, μη=log(0.05),ση2=0.05,ρ_ω=0.1, γ=1.0,�
 
 
 # Solve model using ModelFunctions
-println("Solving price policy...")
+# println("Solving price policy...")
 p_policy_current = zeros(params.Ns, params.Q_ω)
 
 # Initial price guess via static FOC for each ω state
@@ -58,20 +58,29 @@ for j in 1:params.Q_ω
     p_policy_current[:, j], conv = solve_price_policy(params, params.c, params.ω_grid[j])
 end
 
-p_policy_proxy = zeros(params.Ns, params.Q_ω)
+# expD = Matrix{Float64}(undef,params.Ns-1,params.Q_ω)
+# for i in 2:params.Ns, j in 1:params.Q_ω
+#     expD[i-1,j] = expected_demand(params.Sgrid[i],p_policy_current[i,j],params)
+# end
 
-# Initial price guess via static FOC for each ω state
-for j in 1:params.Q_ω
-    p_policy_proxy[:, j], conv = solve_proxy_price_policy(params, params.c, params.ω_grid[j])
-end
+# lim_p = limit_price(params.dist, params.ϵ, params.γ, params.c, params.ω_grid[1])
+# Smax=1.5*quantile(params.dist,0.85)*(lim_p)^(-params.ϵ)
+
+# p_policy_proxy = zeros(params.Ns, params.Q_ω)
+
+# # Initial price guess via static FOC for each ω state
+# for j in 1:params.Q_ω
+#     p_policy_proxy[:, j], conv = solve_proxy_price_policy(params, params.c, params.ω_grid[j])
+# end
 
 
 # ind = 3:length(params.Sgrid)
 # plot(params.Sgrid[ind],p_policy[ind])
 D_table, C_table = precompute_demand(p_policy_current, params)
 
+
 println("Solving value function...")
-p_policy, order_policy, V, V_by_omega, price_policy_interp, order_policy_interp, Vinterp, converged = solve_model(params,conv=:policy,tol=1e-3,verbose=true,fast_interp=true,maxiter=250,full=false);
+p_policy, order_policy, V, V_by_omega, price_policy_interp, order_policy_interp, Vinterp, converged = solve_model(params,conv=:policy,tol=1e-3,verbose=true,fast_interp=false,maxiter=250,full=false);
 
 # p_policy_full, order_policy_full, V_full, V_by_omega_full, price_policy_interp, order_policy_interp, Vinterp = solve_model(params,full=true);
 

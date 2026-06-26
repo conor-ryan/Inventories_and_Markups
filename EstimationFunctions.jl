@@ -291,6 +291,8 @@ function _simulate_all_moments(params::Parameters, ppi, opi,
     inv_sim, dem_sim, exp_sim, rev_sim =
         simulate_firm(rng, n_firms, n_months, ppi, opi, params)
 
+    any(rev_sim.<=0) && error("NON-POSITIVE REVENUE")
+
     # Single-pass monthly moments — no temporary arrays, Welford online variance
     n_mo = 0; sum_isr = 0.0; sum_gm = 0.0
     mean_l1p = 0.0; M2_l1p = 0.0
@@ -723,7 +725,7 @@ function compute_moments_on_grid(param_vectors::AbstractVector{<:AbstractVector{
                                   max_value_iterations::Int = 5000,
                                   grid_size::Int = 200,
                                   scale::Float64 = 1.0,
-                                  size::Float64 = 100.0,
+                                  size::Float64 = 1.0,
                                   solve_tol = 1e-4,
                                   output_path::String       = "grid_moments.csv")
 
