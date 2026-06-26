@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from model_functions import (
     Parameters, solve_price_policy, precompute_demand,
-    _vfi_sweep, solve_value_function,
+    _vfi_sweep, _price_policy_sweep, solve_value_function,
 )
 
 # ---------------------------------------------------------------------------
@@ -84,6 +84,10 @@ print("Warming up JIT compilation...")
 _vfi_sweep(ev_all, d_table, c_table, p_policy, params.sgrid,
            s_lo, inv_h, params.fc, params.c, params.delta, params.beta,
            params.quad_weights)
+_price_policy_sweep(
+    params.sgrid, params.omega_grid, params.c, params.epsilon, params.gamma,
+    params.mu_log_nu, params.sigma_log_nu, params.gl_nodes, params.gl_weights,
+)
 print("Done.\n")
 
 # ---------------------------------------------------------------------------
@@ -99,14 +103,21 @@ while n <= _max_threads:
     thread_counts.append(n)
     n *= 2
 
-hdr = (f"{'Threads':>8}  {'price_policy (ms)':>18}  "
-       f"{'per sweep (ms)':>15}  {'VFI iters':>10}  "
-       f"{'total svf (ms)':>15}")
+hdr = (f"{'Threads':>8}  {'seq price (ms)':>15}  {'par price (ms)':>15}  "
+       f"{'per sweep (ms)':>15}  {'VFI iters':>10}  {'total svf (ms)':>15}")
 print(hdr)
 print("-" * len(hdr))
 
 for n_threads in thread_counts:
     numba.set_num_threads(n_threads)
+
+    # --- parallel price policy sweep ---
+    t0 = time.perf_counter()
+    _price_policy_sweep(
+        params.sgrid, params.omega_grid, params.c, params.epsilon, params.gamma,
+        params.mu_log_nu, params.sigma_log_nu, params.gl_nodes, params.gl_weights,
+    )
+    par_price_ms = (time.perf_counter() - t0) * 1000
 
     # --- per-sweep timing (isolated _vfi_sweep) ---
     t0 = time.perf_counter()
@@ -123,6 +134,5 @@ for n_threads in thread_counts:
 
     n_iters = sol["iterations"]
 
-    print(f"{n_threads:>8}  {t_price*1000:>18.1f}  "
-          f"{per_sweep_ms:>15.1f}  {n_iters:>10}  "
-          f"{t_svf_ms:>15.1f}")
+    print(f"{n_threads:>8}  {t_price*1000:>15.1f}  {par_price_ms:>15.1f}  "
+          f"{per_sweep_ms:>15.1f}  {n_iters:>10}  {t_svf_ms:>15.1f}")

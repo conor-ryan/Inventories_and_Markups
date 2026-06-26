@@ -242,6 +242,248 @@ def limit_price(mu_log, sigma_log, epsilon, gamma, c_tilde, omega):
     return result.x
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# JIT-compatible normal distribution primitives
+# ──────────────────────────────────────────────────────────────────────────────
+
+@jit(nopython=True, fastmath=True, cache=True)
+def _norm_cdf(x):
+    return 0.5 * math.erfc(-x * 0.7071067811865476)
+
+
+@jit(nopython=True, fastmath=True, cache=True)
+def _norm_ppf(p):
+    # Peter Acklam's rational approximation; max absolute error ~1.15e-9
+    a0 = -3.969683028665376e+01; a1 =  2.209460984245205e+02
+    a2 = -2.759285104469687e+02; a3 =  1.383577518672690e+02
+    a4 = -3.066479806614716e+01; a5 =  2.506628277459239e+00
+    b0 = -5.447609879822406e+01; b1 =  1.615858368580409e+02
+    b2 = -1.556989798598866e+02; b3 =  6.680131188771972e+01
+    b4 = -1.328068155288572e+01
+    c0 = -7.784894002430293e-03; c1 = -3.223964580411365e-01
+    c2 = -2.400758277161838e+00; c3 = -2.549732539343734e+00
+    c4 =  4.374664141464968e+00; c5 =  2.938163982698783e+00
+    d0 =  7.784695709041462e-03; d1 =  3.224671290700398e-01
+    d2 =  2.445134137142996e+00; d3 =  3.754408661907416e+00
+    p_low = 0.02425
+    if p < p_low:
+        q = math.sqrt(-2.0 * math.log(p))
+        return (((((c0*q+c1)*q+c2)*q+c3)*q+c4)*q+c5) / \
+               ((((d0*q+d1)*q+d2)*q+d3)*q+1.0)
+    elif p <= 1.0 - p_low:
+        q = p - 0.5; r = q * q
+        return (((((a0*r+a1)*r+a2)*r+a3)*r+a4)*r+a5)*q / \
+               (((((b0*r+b1)*r+b2)*r+b3)*r+b4)*r+1.0)
+    else:
+        q = math.sqrt(-2.0 * math.log(1.0 - p))
+        return -(((((c0*q+c1)*q+c2)*q+c3)*q+c4)*q+c5) / \
+                ((((d0*q+d1)*q+d2)*q+d3)*q+1.0)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# JIT versions of price helper functions (raw scalars/arrays, not params object)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@jit(nopython=True, fastmath=True, cache=True)
+def _lognormal_cdf_jit(x, mu, sigma):
+    if x <= 0.0:
+        return 0.0
+    return _norm_cdf((math.log(x) - mu) / sigma)
+
+
+@jit(nopython=True, fastmath=True, cache=True)
+def _trunc_lognormal_mean_jit(nu_bar, mu_log_nu, sigma_log_nu):
+    log_nu = math.log(nu_bar)
+    z1 = (log_nu - mu_log_nu - sigma_log_nu * sigma_log_nu) / sigma_log_nu
+    z0 = (log_nu - mu_log_nu) / sigma_log_nu
+    return math.exp(mu_log_nu + 0.5 * sigma_log_nu * sigma_log_nu) * _norm_cdf(z1) / _norm_cdf(z0)
+
+
+@jit(nopython=True, fastmath=True, cache=True)
+def _trunc_ratio_jit(nu_bar, mu_log_nu, sigma_log_nu, gamma, gl_nodes, gl_weights):
+    """(ratio, half_num, half_den) = (E[ν^γ]/E[ν], ½·f_bar·E[ν^γ], ½·f_bar·E[ν]) under truncated lognormal."""
+    f_bar = _lognormal_cdf_jit(nu_bar, mu_log_nu, sigma_log_nu)
+    if f_bar <= 0.0:
+        return 0.0, 0.0, 0.0
+    half_fbar = 0.5 * f_bar
+    num = 0.0; den = 0.0
+    for k in range(len(gl_nodes)):
+        u_k = half_fbar * (gl_nodes[k] + 1.0)
+        if u_k < 1e-12:
+            u_k = 1e-12
+        elif u_k > 1.0 - 1e-12:
+            u_k = 1.0 - 1e-12
+        nu_k = math.exp(mu_log_nu + sigma_log_nu * _norm_ppf(u_k))
+        w_k  = gl_weights[k]
+        num += w_k * nu_k ** gamma
+        den += w_k * nu_k
+    ratio = (num / den) if den > 0.0 else 0.0
+    return ratio, 0.5 * num, 0.5 * den
+
+
+@jit(nopython=True, fastmath=True, cache=True)
+def _proxy_profit_unconst_jit(p, c_tilde, omega, mu_log_nu, sigma_log_nu, epsilon, gamma):
+    e_nu       = math.exp(mu_log_nu + 0.5 * sigma_log_nu * sigma_log_nu)
+    e_nu_gamma = math.exp(gamma * mu_log_nu + 0.5 * (gamma * sigma_log_nu) ** 2)
+    return e_nu * p ** (-epsilon) * (p - c_tilde) - omega * e_nu_gamma * p ** (-gamma * epsilon)
+
+
+@jit(nopython=True, fastmath=True, cache=True)
+def _price_residual_jit(p, s, c_tilde, omega, epsilon, gamma,
+                        mu_log_nu, sigma_log_nu, gl_nodes, gl_weights):
+    nu_bar = s * (p ** epsilon)
+    f_bar  = _lognormal_cdf_jit(nu_bar, mu_log_nu, sigma_log_nu)
+    if f_bar < 1e-10:
+        return 1e6
+    tail  = 1.0 - f_bar
+    e_nu  = _trunc_lognormal_mean_jit(nu_bar, mu_log_nu, sigma_log_nu)
+    ratio = _trunc_ratio_jit(nu_bar, mu_log_nu, sigma_log_nu, gamma, gl_nodes, gl_weights)[0]
+    opp_mc = omega * gamma * ratio * (p ** (epsilon * (1.0 - gamma)))
+    rhs = (
+        (epsilon / (epsilon - 1.0)) * (opp_mc + c_tilde)
+        + (1.0 / (epsilon - 1.0)) * s * (p ** (epsilon + 1.0)) * (1.0 / e_nu) * (tail / f_bar)
+    )
+    return p - rhs
+
+
+@jit(nopython=True, fastmath=True, cache=True)
+def _proxy_profit_jit(p, s, c_tilde, omega, epsilon, gamma,
+                      mu_log_nu, sigma_log_nu, gl_nodes, gl_weights):
+    nu_bar = s * p ** epsilon
+    f_bar  = _lognormal_cdf_jit(nu_bar, mu_log_nu, sigma_log_nu)
+    tail   = 1.0 - f_bar
+    _, e_nu_gamma_trunc, e_nu_trunc = _trunc_ratio_jit(
+        nu_bar, mu_log_nu, sigma_log_nu, gamma, gl_nodes, gl_weights
+    )
+    e_d       = p ** (-epsilon) * f_bar * e_nu_trunc + s * tail
+    e_d_gamma = p ** (-gamma * epsilon) * f_bar * e_nu_gamma_trunc + (s ** gamma) * tail
+    return (p - c_tilde) * e_d - omega * e_d_gamma
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# JIT root/minimization solvers — Brent's method, inlined objective
+# ──────────────────────────────────────────────────────────────────────────────
+
+@jit(nopython=True, fastmath=True, cache=True)
+def _limit_price_jit(c_tilde, omega, mu_log_nu, sigma_log_nu, epsilon, gamma):
+    """Brent's bounded minimization of -proxy_profit_unconst on [1e-3, 5.0]."""
+    CGOLD = 0.3819660112501051
+    ZEPS  = 1e-10
+    tol   = 1e-8
+    a = 1e-3; b = 5.0
+
+    x = w = v = a + CGOLD * (b - a)
+    fx = fw = fv = -_proxy_profit_unconst_jit(x, c_tilde, omega, mu_log_nu, sigma_log_nu, epsilon, gamma)
+    d = e = 0.0
+
+    for _ in range(500):
+        xm   = 0.5 * (a + b)
+        tol1 = tol * abs(x) + ZEPS
+        tol2 = 2.0 * tol1
+        if abs(x - xm) <= tol2 - 0.5 * (b - a):
+            return x
+        if abs(e) > tol1:
+            r = (x - w) * (fx - fv)
+            q = (x - v) * (fx - fw)
+            p_val = (x - v) * q - (x - w) * r
+            q = 2.0 * (q - r)
+            if q > 0.0:
+                p_val = -p_val
+            else:
+                q = -q
+            r = e; e = d
+            if abs(p_val) < abs(0.5 * q * r) and p_val > q * (a - x) and p_val < q * (b - x):
+                d = p_val / q
+                u = x + d
+                if (u - a) < tol2 or (b - u) < tol2:
+                    d = tol1 if xm >= x else -tol1
+            else:
+                e = (a - x) if x >= xm else (b - x)
+                d = CGOLD * e
+        else:
+            e = (a - x) if x >= xm else (b - x)
+            d = CGOLD * e
+        u  = x + (d if abs(d) >= tol1 else (tol1 if d >= 0.0 else -tol1))
+        fu = -_proxy_profit_unconst_jit(u, c_tilde, omega, mu_log_nu, sigma_log_nu, epsilon, gamma)
+        if fu <= fx:
+            if u < x: b = x
+            else:     a = x
+            v = w; fv = fw; w = x; fw = fx; x = u; fx = fu
+        else:
+            if u < x: a = u
+            else:     b = u
+            if fu <= fw or w == x:
+                v = w; fv = fw; w = u; fw = fu
+            elif fu <= fv or v == x or v == w:
+                v = u; fv = fu
+    return x
+
+
+@jit(nopython=True, fastmath=True, cache=True)
+def _brent_root_price(s, c_tilde, omega, p_lo, p_hi, epsilon, gamma,
+                      mu_log_nu, sigma_log_nu, gl_nodes, gl_weights):
+    """Brent's root finding for price_residual on [p_lo, p_hi]. Returns (p_opt, converged)."""
+    xtol    = 1e-12
+    EPS     = 2.220446049250313e-16
+    maxiter = 200
+
+    a = p_lo; b = p_hi
+    fa = _price_residual_jit(a, s, c_tilde, omega, epsilon, gamma,
+                             mu_log_nu, sigma_log_nu, gl_nodes, gl_weights)
+    fb = _price_residual_jit(b, s, c_tilde, omega, epsilon, gamma,
+                             mu_log_nu, sigma_log_nu, gl_nodes, gl_weights)
+
+    if fa * fb > 0.0:
+        return 0.5 * (a + b), False
+    if fa == 0.0:
+        return a, True
+    if fb == 0.0:
+        return b, True
+
+    c = a; fc = fa; d = b - a; e = d
+
+    for _ in range(maxiter):
+        if fb * fc > 0.0:
+            c = a; fc = fa; d = b - a; e = d
+        if abs(fc) < abs(fb):
+            a = b; fa = fb; b = c; fb = fc; c = a; fc = fa
+
+        tol1 = 2.0 * EPS * abs(b) + 0.5 * xtol
+        xm   = 0.5 * (c - b)
+        if abs(xm) <= tol1 or fb == 0.0:
+            return b, True
+
+        if abs(e) >= tol1 and abs(fa) > abs(fb):
+            ss = fb / fa
+            if a == c:
+                pp = 2.0 * xm * ss
+                qq = 1.0 - ss
+            else:
+                qq = fa / fc; rr = fb / fc
+                pp = ss * (2.0 * xm * qq * (qq - rr) - (b - a) * (rr - 1.0))
+                qq = (qq - 1.0) * (rr - 1.0) * (ss - 1.0)
+            if pp > 0.0:
+                qq = -qq
+            else:
+                pp = -pp
+            if 2.0 * pp < min(3.0 * xm * qq - abs(tol1 * qq), abs(e * qq)):
+                e = d; d = pp / qq
+            else:
+                d = xm; e = d
+        else:
+            d = xm; e = d
+
+        a = b; fa = fb
+        if abs(d) > tol1:
+            b += d
+        else:
+            b += tol1 if xm > 0.0 else -tol1
+        fb = _price_residual_jit(b, s, c_tilde, omega, epsilon, gamma,
+                                 mu_log_nu, sigma_log_nu, gl_nodes, gl_weights)
+
+    return b, abs(fb) <= xtol
+
+
 @jit(nopython=True, fastmath=True, cache=True)
 def _ev_single(n, s, d_col, c_col, p, vinterp_vals, s_lo, inv_h, fc, c_param, delta, beta, quad_weights):
     """Compiled EV evaluation for a single order quantity n."""
@@ -386,6 +628,53 @@ def _vfi_sweep(ev_all, d_table, c_table, p_policy, sgrid,
     return v_new_t.T, n_pol_t.T
 
 
+@jit(nopython=True, parallel=True, fastmath=True, cache=True)
+def _price_policy_sweep(sgrid, omega_grid, c_tilde, epsilon, gamma,
+                        mu_log_nu, sigma_log_nu, gl_nodes, gl_weights):
+    """Compute price policy for all (omega, s) cells in parallel.
+    Returns (p_policy, all_converged) where p_policy has shape (ns, n_omega).
+    """
+    n_omega = len(omega_grid)
+    ns      = len(sgrid)
+    p_policy = np.zeros((ns, n_omega), dtype=np.float64)
+    failed   = np.zeros(n_omega * ns, dtype=np.uint8)
+
+    # Sequential: unconstrained prices per omega (7 iterations, cheap)
+    p_unc = np.empty(n_omega, dtype=np.float64)
+    for j in range(n_omega):
+        p_unc[j] = _limit_price_jit(c_tilde, omega_grid[j], mu_log_nu, sigma_log_nu, epsilon, gamma)
+    nu_threshold = math.exp(mu_log_nu + sigma_log_nu * _norm_ppf(1e-8))
+
+    # Parallel: one Brent root-finding call per (omega, s) cell
+    for idx in prange(n_omega * ns):
+        j = idx // ns
+        i = idx  % ns
+        s = sgrid[i]
+        if s == 0.0:
+            p_policy[i, j] = 1.0
+        else:
+            p_unc_j = p_unc[j]
+            p_lo_s  = max(0.99 * p_unc_j, (nu_threshold / s) ** (1.0 / epsilon))
+            p_opt, conv = _brent_root_price(
+                s, c_tilde, omega_grid[j], p_lo_s, 50.0,
+                epsilon, gamma, mu_log_nu, sigma_log_nu, gl_nodes, gl_weights,
+            )
+            is_fail = not conv
+            if not is_fail:
+                if _proxy_profit_jit(
+                    p_opt, s, c_tilde, omega_grid[j], epsilon, gamma,
+                    mu_log_nu, sigma_log_nu, gl_nodes, gl_weights,
+                ) < 0.0:
+                    is_fail = True
+            if is_fail:
+                failed[idx] = 1
+                p_policy[i, j] = p_unc_j
+            else:
+                p_policy[i, j] = p_opt
+
+    return p_policy, np.sum(failed) == 0
+
+
 def _maximize_expected_value_choice_precomp(s_i, j, d_table, c_table, p_policy, vinterp, params, n_upper):
     # d_table shape is (n_omega, ns, Q) — last axis already contiguous, no copy needed
     d_col = d_table[j, s_i, :]
@@ -409,12 +698,10 @@ def solve_value_function(params, tol=1e-4, maxiter=1000,conv="policy"):
     v_by_omega       = np.zeros((ns, n_omega), dtype=np.float64)
     p_policy_current = np.zeros((ns, n_omega), dtype=np.float64)
     n_policy_prev = np.zeros((ns, n_omega), dtype=np.float64)
-    all_price_converged = True
-    for j in range(n_omega):
-        p_col, p_conv = solve_price_policy(params, params.c, params.omega_grid[j])
-        p_policy_current[:, j] = p_col
-        if not p_conv:
-            all_price_converged = False
+    p_policy_current, all_price_converged = _price_policy_sweep(
+        params.sgrid, params.omega_grid, params.c, params.epsilon, params.gamma,
+        params.mu_log_nu, params.sigma_log_nu, params.gl_nodes, params.gl_weights,
+    )
     
     if not all_price_converged:
         return {
