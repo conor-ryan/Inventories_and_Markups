@@ -56,6 +56,10 @@ print()
 # ---------------------------------------------------------------------------
 # 1. Time solve_price_policy (sequential — same for every thread count)
 # ---------------------------------------------------------------------------
+# Throwaway call to warm CPU caches before the timed measurement.
+for j in range(params.q_omega):
+    solve_price_policy(params, params.c, params.omega_grid[j])
+
 t0 = time.perf_counter()
 for j in range(params.q_omega):
     solve_price_policy(params, params.c, params.omega_grid[j])
