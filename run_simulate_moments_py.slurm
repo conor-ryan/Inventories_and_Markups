@@ -5,7 +5,7 @@
 #SBATCH --time=08:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --account=econ_crch_research
 #SBATCH --partition=basic
