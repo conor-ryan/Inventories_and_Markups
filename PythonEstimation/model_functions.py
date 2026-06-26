@@ -6,7 +6,8 @@ import numpy as np
 from numba import jit, prange
 from numpy.polynomial.hermite import hermgauss
 from numpy.polynomial.legendre import leggauss
-from scipy.optimize import minimize_scalar
+from scipy.optimize import minimize_scalar, brentq
+from scipy.special import ndtri
 
 
 SQRT_PI = math.sqrt(math.pi)
@@ -177,16 +178,10 @@ def truncated_lognormal_ratio_e_nu_gamma_over_e_nu(nu_bar, params):
         return 0.0, 0.0, 0.0
 
     half_fbar = 0.5 * f_bar
-    num = 0.0
-    den = 0.0
-
-    for q in range(params.q):
-        u_q = half_fbar * (params.gl_nodes[q] + 1.0)
-        u_q = min(max(u_q, 1e-12), 1.0 - 1e-12)
-        nu_q = math.exp(params.mu_log_nu + params.sigma_log_nu * NORMAL.inv_cdf(u_q))
-        w_q = params.gl_weights[q]
-        num += w_q * (nu_q ** params.gamma)
-        den += w_q * nu_q
+    u_q = np.clip(half_fbar * (params.gl_nodes + 1.0), 1e-12, 1.0 - 1e-12)
+    nu_q = np.exp(params.mu_log_nu + params.sigma_log_nu * ndtri(u_q))
+    num = float(params.gl_weights @ (nu_q ** params.gamma))
+    den = float(params.gl_weights @ nu_q)
 
     ratio = (num / den) if den > 0.0 else 0.0
     return ratio, 0.5 * num, 0.5 * den
@@ -321,19 +316,30 @@ def _optimize_n(s, d_col, c_col, p, vinterp_vals, s_lo, inv_h, fc, c_param, delt
 def solve_price_policy(params, c_tilde, omega):
     p_policy = np.empty(params.ns, dtype=np.float64)
     price_converged = True
+    p_unc = limit_price(params.mu_log_nu, params.sigma_log_nu, params.epsilon, params.gamma, c_tilde, omega)
+    p_lo = 0.99 * p_unc
+    p_hi = 50.0
+    # Minimum nu_bar that keeps f_bar above the 1e-10 guard in price_residual.
+    # For small s, p_lo may fall below this threshold, giving residual=1e6 on
+    # both bracket ends (no sign change). We lift the lower bound per-state.
+    _nu_threshold = math.exp(params.mu_log_nu + params.sigma_log_nu * float(ndtri(1e-8)))
     for i, s in enumerate(params.sgrid):
         if s == 0.0:
             p_policy[i] = 1.0
             continue
-        objective = lambda p: price_residual(p, s, c_tilde, omega, params) ** 2
-        result = minimize_scalar(objective, bounds=(1e-3, 50.0), method='bounded',options={"xatol": 1e-12})
-        p_policy[i] = result.x
-        if not result.success or math.sqrt(result.fun) > 1e-6:
-            # print("Warning: No Convergence at s =", s, "p =", result.x, "residual =", math.sqrt(result.fun), "message =", result.message)
+        p_lo_s = max(p_lo, (_nu_threshold / s) ** (1.0 / params.epsilon))
+        try:
+            p_opt = brentq(
+                lambda p: price_residual(p, s, c_tilde, omega, params),
+                p_lo_s, p_hi,
+                xtol=1e-12,
+            )
+            p_policy[i] = p_opt
+            if proxy_profit(p_opt, s, c_tilde, omega, params) < 0.0:
+                price_converged = False
+        except ValueError:
             price_converged = False
-        elif proxy_profit(result.x, s, c_tilde, omega, params) < 0.0:
-            # print("Warning: Negative profit at s =", s, "p =", result.x)
-            price_converged = False
+            p_policy[i] = p_unc
     return p_policy, price_converged
 
 
