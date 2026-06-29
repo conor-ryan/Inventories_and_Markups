@@ -420,6 +420,72 @@ def _limit_price_jit(c_tilde, omega, mu_log_nu, sigma_log_nu, epsilon, gamma):
 
 
 @jit(nopython=True, fastmath=True, cache=True)
+def _maximize_proxy_profit_jit(s, c_tilde, omega, p_lo, p_hi, epsilon, gamma,
+                                mu_log_nu, sigma_log_nu, gl_nodes, gl_weights):
+    """Brent's bounded maximization of proxy_profit on [p_lo, p_hi].
+
+    Fallback for _brent_root_price when no sign change exists in the bracket.
+    Returns (p_opt, profit_at_p_opt). Caller must verify profit_at_p_opt >= 0
+    to confirm a valid (profitable) price was found rather than a boundary result.
+    """
+    CGOLD = 0.3819660112501051
+    ZEPS  = 1e-10
+    tol   = 1e-8
+    a = p_lo; b = p_hi
+
+    x = w = v = a + CGOLD * (b - a)
+    fx = fw = fv = -_proxy_profit_jit(x, s, c_tilde, omega, epsilon, gamma,
+                                       mu_log_nu, sigma_log_nu, gl_nodes, gl_weights)
+    d = e = 0.0
+
+    for _ in range(500):
+        xm   = 0.5 * (a + b)
+        tol1 = tol * abs(x) + ZEPS
+        tol2 = 2.0 * tol1
+        if abs(x - xm) <= tol2 - 0.5 * (b - a):
+            break
+        if abs(e) > tol1:
+            r = (x - w) * (fx - fv)
+            q = (x - v) * (fx - fw)
+            p_val = (x - v) * q - (x - w) * r
+            q = 2.0 * (q - r)
+            if q > 0.0:
+                p_val = -p_val
+            else:
+                q = -q
+            r = e; e = d
+            if abs(p_val) < abs(0.5 * q * r) and p_val > q * (a - x) and p_val < q * (b - x):
+                d = p_val / q
+                u = x + d
+                if (u - a) < tol2 or (b - u) < tol2:
+                    d = tol1 if xm >= x else -tol1
+            else:
+                e = (a - x) if x >= xm else (b - x)
+                d = CGOLD * e
+        else:
+            e = (a - x) if x >= xm else (b - x)
+            d = CGOLD * e
+        u  = x + (d if abs(d) >= tol1 else (tol1 if d >= 0.0 else -tol1))
+        fu = -_proxy_profit_jit(u, s, c_tilde, omega, epsilon, gamma,
+                                 mu_log_nu, sigma_log_nu, gl_nodes, gl_weights)
+        if fu <= fx:
+            if u < x: b = x
+            else:     a = x
+            v = w; fv = fw; w = x; fw = fx; x = u; fx = fu
+        else:
+            if u < x: a = u
+            else:     b = u
+            if fu <= fw or w == x:
+                v = w; fv = fw; w = u; fw = fu
+            elif fu <= fv or v == x or v == w:
+                v = u; fv = fu
+
+    profit = _proxy_profit_jit(x, s, c_tilde, omega, epsilon, gamma,
+                                mu_log_nu, sigma_log_nu, gl_nodes, gl_weights)
+    return x, profit
+
+
+@jit(nopython=True, fastmath=True, cache=True)
 def _brent_root_price(s, c_tilde, omega, p_lo, p_hi, epsilon, gamma,
                       mu_log_nu, sigma_log_nu, gl_nodes, gl_weights):
     """Brent's root finding for price_residual on [p_lo, p_hi]. Returns (p_opt, converged)."""
@@ -570,18 +636,36 @@ def solve_price_policy(params, c_tilde, omega):
             p_policy[i] = 1.0
             continue
         p_lo_s = max(p_lo, (_nu_threshold / s) ** (1.0 / params.epsilon))
-        try:
-            p_opt = brentq(
-                lambda p: price_residual(p, s, c_tilde, omega, params),
-                p_lo_s, p_hi,
-                xtol=1e-12,
+        r_lo = price_residual(p_lo_s, s, c_tilde, omega, params)
+        r_hi = price_residual(p_hi, s, c_tilde, omega, params)
+
+        p_opt = None
+        if r_lo * r_hi <= 0.0:
+            try:
+                p_opt = brentq(
+                    lambda p: price_residual(p, s, c_tilde, omega, params),
+                    p_lo_s, p_hi,
+                    xtol=1e-12,
+                )
+                if proxy_profit(p_opt, s, c_tilde, omega, params) < 0.0:
+                    p_opt = None
+            except ValueError:
+                p_opt = None
+
+        if p_opt is None:
+            result = minimize_scalar(
+                lambda p: -proxy_profit(p, s, c_tilde, omega, params),
+                bounds=(p_lo_s, p_hi),
+                method='bounded',
             )
-            p_policy[i] = p_opt
-            if proxy_profit(p_opt, s, c_tilde, omega, params) < 0.0:
+            p_opt_fb = result.x
+            if proxy_profit(p_opt_fb, s, c_tilde, omega, params) >= 0.0:
+                p_opt = p_opt_fb
+            else:
                 price_converged = False
-        except ValueError:
-            price_converged = False
-            p_policy[i] = p_unc
+                p_opt = p_unc
+
+        p_policy[i] = p_opt
     return p_policy, price_converged
 
 
@@ -667,8 +751,15 @@ def _price_policy_sweep(sgrid, omega_grid, c_tilde, epsilon, gamma,
                 ) < 0.0:
                     is_fail = True
             if is_fail:
-                failed[idx] = 1
-                p_policy[i, j] = p_unc_j
+                p_fb, profit_fb = _maximize_proxy_profit_jit(
+                    s, c_tilde, omega_grid[j], p_lo_s, 50.0,
+                    epsilon, gamma, mu_log_nu, sigma_log_nu, gl_nodes, gl_weights,
+                )
+                if profit_fb >= 0.0:
+                    p_policy[i, j] = p_fb
+                else:
+                    failed[idx] = 1
+                    p_policy[i, j] = p_unc_j
             else:
                 p_policy[i, j] = p_opt
 

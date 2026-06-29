@@ -76,22 +76,22 @@ t1 = time.perf_counter()
 print(f"First call (includes JIT compile): {t1 - t0:.2f}s")
 
 
-# %% Solve VFI — 10 timed runs (compiled cache, true runtime)
-N_RUNS = 10
-times = []
-for _ in range(N_RUNS):
-    t0 = time.perf_counter()
-    result = solve_value_function(params, tol=1e-4, maxiter=1000)
-    times.append(time.perf_counter() - t0)
+# # %% Solve VFI — 10 timed runs (compiled cache, true runtime)
+# N_RUNS = 10
+# times = []
+# for _ in range(N_RUNS):
+#     t0 = time.perf_counter()
+#     result = solve_value_function(params, tol=1e-4, maxiter=1000)
+#     times.append(time.perf_counter() - t0)
 
-times = np.array(times)
-n_iter = result["iterations"]
-print(f"Timed runs (n={N_RUNS}):")
-print(f"  mean:   {times.mean():.3f}s  |  std: {times.std():.3f}s")
-print(f"  min:    {times.min():.3f}s  |  max: {times.max():.3f}s")
-print(f"  median: {np.median(times):.3f}s")
-print(f"  per VFI iteration (mean): {times.mean() / n_iter:.4f}s")
-print(f"  per (s, ω) state  (mean): {times.mean() / n_iter / params.ns / params.q_omega * 1e6:.2f} µs")
+# times = np.array(times)
+# n_iter = result["iterations"]
+# print(f"Timed runs (n={N_RUNS}):")
+# print(f"  mean:   {times.mean():.3f}s  |  std: {times.std():.3f}s")
+# print(f"  min:    {times.min():.3f}s  |  max: {times.max():.3f}s")
+# print(f"  median: {np.median(times):.3f}s")
+# print(f"  per VFI iteration (mean): {times.mean() / n_iter:.4f}s")
+# print(f"  per (s, ω) state  (mean): {times.mean() / n_iter / params.ns / params.q_omega * 1e6:.2f} µs")
 
 
 # %% Quick diagnostics

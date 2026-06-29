@@ -29,6 +29,8 @@ V, n_policy, p_policy, V_by_omega, converged = solve_value_function(
     maxiter=1000,
     full=false,
     fast_interp=true,
+    conv=:policy,
+    verbose=true,
 )
 
 writedlm(joinpath(output_dir, "sgrid.csv"), params.Sgrid, ',')
